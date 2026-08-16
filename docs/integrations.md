@@ -1,6 +1,19 @@
 # Integrating a harness
 
-ChainProof accepts data three ways.
+ChainProof accepts data through a built-in Codex collector and three generic
+integration modes.
+
+## Built-in Codex collector
+
+The default TUI and server discover and follow `~/.codex/sessions/**/*.jsonl`.
+Use `chainproof codex sync` for a one-shot import or `chainproof codex watch`
+for a collector-only foreground process. `CHAINPROOF_CODEX_ROOT` overrides the
+source directory; `CHAINPROOF_CODEX_CONTENT=full` opts into transcript content
+instead of the default hashes. Reasoning records are not imported.
+
+Codex session JSONL is a local implementation detail rather than ChainProof's
+public protocol. Its parser is versioned as `codex-local-v1`; unknown records
+are skipped, and fixtures must accompany parser changes.
 
 ## Push
 

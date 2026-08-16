@@ -11,17 +11,20 @@ import (
 	"net/http"
 	"os"
 	"os/exec"
+	"os/signal"
 	"path/filepath"
 	"strconv"
 	"strings"
+	"syscall"
 
+	codexadapter "github.com/vajramatt/chainproof/internal/adapters/codex"
 	"github.com/vajramatt/chainproof/internal/proof"
 	"github.com/vajramatt/chainproof/internal/server"
 	"github.com/vajramatt/chainproof/internal/store"
 	"github.com/vajramatt/chainproof/internal/tui"
 )
 
-const version = "0.1.0"
+const version = "0.2.0"
 
 func main() {
 	if err := run(os.Args[1:]); err != nil {
@@ -177,18 +180,66 @@ func run(args []string) error {
 		v, e := db.Runs(ctx, 100)
 		return output(v, e)
 	case "ui":
+		watchCtx, cancel := context.WithCancel(ctx)
+		defer cancel()
+		if collector, collectorErr := newCodexCollector(db); collectorErr == nil && collector != nil {
+			go collector.Watch(watchCtx, nil)
+		}
 		return tui.Run(db)
 	case "serve":
 		address := "127.0.0.1:7331"
 		if len(args) > 1 {
 			address = args[1]
 		}
-		fmt.Printf("ChainProof web explorer: http://%s\n", address)
+		watchCtx, cancel := context.WithCancel(ctx)
+		defer cancel()
+		if collector, collectorErr := newCodexCollector(db); collectorErr != nil {
+			return collectorErr
+		} else if collector != nil {
+			go collector.Watch(watchCtx, func(stats codexadapter.Stats, err error) {
+				if err != nil {
+					fmt.Fprintln(os.Stderr, "Codex collector:", err)
+				} else if stats.EventsImported > 0 {
+					fmt.Fprintf(os.Stderr, "Codex collector: %d new events from %d sessions\n", stats.EventsImported, stats.Sources)
+				}
+			})
+		}
+		fmt.Printf("ChainProof web explorer: http://%s (Codex discovery on)\n", address)
 		e = server.New(db, address).ListenAndServe()
 		if errors.Is(e, http.ErrServerClosed) {
 			return nil
 		}
 		return e
+	case "codex":
+		if len(args) < 2 {
+			return errors.New("usage: chainproof codex sync|watch")
+		}
+		collector, collectorErr := newCodexCollector(db)
+		if collectorErr != nil {
+			return collectorErr
+		}
+		if collector == nil {
+			return errors.New("Codex collector disabled by CHAINPROOF_CODEX_DISABLED")
+		}
+		switch args[1] {
+		case "sync":
+			stats, syncErr := collector.Sync(ctx)
+			return output(stats, syncErr)
+		case "watch":
+			watchCtx, cancel := signal.NotifyContext(ctx, os.Interrupt, syscall.SIGTERM)
+			defer cancel()
+			fmt.Println("Following Codex sessions in", collector.Root())
+			collector.Watch(watchCtx, func(stats codexadapter.Stats, err error) {
+				if err != nil {
+					fmt.Fprintln(os.Stderr, "Codex collector:", err)
+				} else if stats.EventsImported > 0 || stats.RunsCreated > 0 {
+					fmt.Printf("Codex: %d runs created, %d events imported\n", stats.RunsCreated, stats.EventsImported)
+				}
+			})
+			return nil
+		default:
+			return errors.New("usage: chainproof codex sync|watch")
+		}
 	case "run":
 		if len(args) < 2 {
 			return errors.New("usage: chainproof run -- COMMAND [ARGS...]")
@@ -229,6 +280,13 @@ func run(args []string) error {
 	}
 }
 
+func newCodexCollector(db *store.Store) (*codexadapter.Collector, error) {
+	if os.Getenv("CHAINPROOF_CODEX_DISABLED") == "1" {
+		return nil, nil
+	}
+	return codexadapter.New(db, codexadapter.Options{Root: os.Getenv("CHAINPROOF_CODEX_ROOT"), Content: os.Getenv("CHAINPROOF_CODEX_CONTENT")})
+}
+
 const usage = `ChainProof — local provenance for any AI agent
 
 Usage:
@@ -244,6 +302,8 @@ Usage:
   chainproof export RUN_ID [PROOF.json]      Export a portable proof
   chainproof verify-file PROOF.json          Verify without a database
   chainproof list
+	chainproof codex sync                     Discover/import Codex sessions once
+	chainproof codex watch                    Continuously follow Codex sessions
   chainproof version
 `
 

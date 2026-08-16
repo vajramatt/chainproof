@@ -31,7 +31,7 @@ machine and the code is MIT licensed.
 ChainProof is one Go binary. With Go 1.24 or newer:
 
 ```sh
-go install github.com/vajramatt/chainproof/cmd/chainproof@v0.1.0
+go install github.com/vajramatt/chainproof/cmd/chainproof@v0.2.0
 ```
 
 Or build the checkout:
@@ -46,7 +46,43 @@ make build
 The database opens at `~/.chainproof/chainproof.db`. Set `CHAINPROOF_DB` to
 put it somewhere else.
 
-## Start with a run
+## Open it
+
+```sh
+chainproof
+```
+
+That is enough. ChainProof discovers the Codex sessions under
+`~/.codex/sessions`, imports what is already there, follows active session
+files once a second, and opens the TUI. New turns appear without launching
+Codex through ChainProof.
+
+The local web app does the same:
+
+```sh
+chainproof serve           # collector + API + dashboard at 127.0.0.1:7331
+```
+
+The collector remembers a byte cursor per session file, so restarting catches
+up and does not duplicate events. One Codex session becomes one ChainProof run.
+
+By default, message bodies, commands, output, and changed-file details are
+stored as a hash and byte count. The operational shape remains visible without
+silently copying the transcript. Because the database is local, you can opt in
+to full content:
+
+```sh
+CHAINPROOF_CODEX_CONTENT=full chainproof
+```
+
+Use a nonstandard Codex home—or turn discovery off—with:
+
+```sh
+CHAINPROOF_CODEX_ROOT=/path/to/codex/sessions chainproof
+CHAINPROOF_CODEX_DISABLED=1 chainproof
+```
+
+## Wrap another agent
 
 The quickest path is to let ChainProof wrap a harness:
 
@@ -106,10 +142,33 @@ Tokyo Night is the house light. Synthwave '84 repaints the room in violet,
 electric pink, and cyan. The local web dashboard carries both palettes too;
 its switch is remembered in the browser.
 
-## Three ways in
+## Four ways in
 
 The proof format knows nothing about model vendors. Integrations sit at the
 edge and normalize into one stable event shape.
+
+### Codex — discovered automatically
+
+The built-in `codex-local-v1` adapter reads Codex's local JSONL session files.
+It normalizes:
+
+- session metadata and working directory
+- model, approval policy, and turn context
+- turn start and completion
+- user and agent messages
+- shell execution, status, exit code, stdout, and stderr
+- file changes, extension calls, and image views
+
+Reasoning records are deliberately skipped. Imported Codex records are marked
+**imported**: ChainProof is protecting Codex's local account of the session,
+not claiming to have independently observed the model.
+
+Run a one-shot catch-up or watch without opening either interface:
+
+```sh
+chainproof codex sync
+chainproof codex watch
+```
 
 ### Push — the harness tells ChainProof
 
@@ -148,9 +207,9 @@ again and only appended records come across. Pulled history is always marked
 chainproof run -- codex
 ```
 
-The wrapper observes process start, exit, and final status. Today, Claude Code
-and Codex need wrapping or a generic push/pull integration; automatic discovery
-and full-fidelity native adapters are not in v0.1.0.
+The wrapper observes process start, exit, and final status. Claude Code and
+other harnesses still need wrapping or a generic push/pull integration today;
+Codex has native automatic discovery.
 
 The adapter contract and integration guidance live in
 [`docs/integrations.md`](docs/integrations.md).
@@ -228,7 +287,7 @@ local SQLite database using WAL mode and serialized writes. Artifact hashes are
 computed over raw bytes—not decoded text—and content-addressed by SHA-256.
 
 The web server binds to `127.0.0.1:7331` by default and rejects non-local host
-headers. v0.1.0 intentionally has no multi-user authentication; do not expose it
+headers. v0.2.0 intentionally has no multi-user authentication; do not expose it
 to a network.
 
 The things ChainProof writes are its own:
@@ -255,6 +314,8 @@ It does not edit the repositories or harness histories it observes.
 | `chainproof export` | write a portable proof bundle |
 | `chainproof verify-file` | independently verify a bundle |
 | `chainproof list` | print local runs as JSON |
+| `chainproof codex sync` | discover and import Codex sessions once |
+| `chainproof codex watch` | continuously follow Codex sessions |
 
 Run `chainproof --help` for the one-screen version.
 

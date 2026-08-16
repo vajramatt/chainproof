@@ -27,6 +27,7 @@ func Open(path string) (*Store, error) {
 	CREATE TABLE IF NOT EXISTS runs(run_id TEXT PRIMARY KEY,agent TEXT NOT NULL,harness TEXT NOT NULL,model TEXT NOT NULL,status TEXT NOT NULL,started_at TEXT NOT NULL,completed_at TEXT,entry_count INTEGER NOT NULL,chain_head TEXT NOT NULL,metadata TEXT NOT NULL);
 	CREATE TABLE IF NOT EXISTS events(event_id TEXT PRIMARY KEY,run_id TEXT NOT NULL REFERENCES runs(run_id),sequence INTEGER NOT NULL,timestamp TEXT NOT NULL,kind TEXT NOT NULL,collection_mode TEXT NOT NULL,event_json TEXT NOT NULL,event_hash TEXT NOT NULL,UNIQUE(run_id,sequence));
 		CREATE TABLE IF NOT EXISTS import_cursors(adapter TEXT NOT NULL,source TEXT NOT NULL,cursor TEXT NOT NULL,updated_at TEXT NOT NULL,PRIMARY KEY(adapter,source));
+		CREATE TABLE IF NOT EXISTS source_runs(adapter TEXT NOT NULL,source TEXT NOT NULL,run_id TEXT NOT NULL REFERENCES runs(run_id),created_at TEXT NOT NULL,PRIMARY KEY(adapter,source));
 		CREATE TABLE IF NOT EXISTS artifacts(hash TEXT PRIMARY KEY,media_type TEXT NOT NULL,body BLOB NOT NULL,size INTEGER NOT NULL,created_at TEXT NOT NULL);
 	CREATE INDEX IF NOT EXISTS events_run_sequence ON events(run_id,sequence);`); err != nil {
 		db.Close()
@@ -62,7 +63,7 @@ func (s *Store) Append(ctx context.Context, runID string, input proof.EventInput
 	if err != nil {
 		return proof.Event{}, err
 	}
-	if run.Status != "active" {
+	if run.Status != "active" && run.Status != "idle" {
 		return proof.Event{}, fmt.Errorf("run is %s", run.Status)
 	}
 	if input.Source.Mode == "" {
@@ -109,7 +110,7 @@ func (s *Store) Append(ctx context.Context, runID string, input proof.EventInput
 	if _, err = tx.ExecContext(ctx, `INSERT INTO events VALUES(?,?,?,?,?,?,?,?)`, event.ID, runID, event.Sequence, now.Format(time.RFC3339Nano), event.Kind, event.Source.Mode, string(raw), hash); err != nil {
 		return proof.Event{}, err
 	}
-	result, err := tx.ExecContext(ctx, `UPDATE runs SET entry_count=entry_count+1,chain_head=? WHERE run_id=? AND entry_count=? AND chain_head=?`, hash, runID, event.Sequence, event.PreviousHash)
+	result, err := tx.ExecContext(ctx, `UPDATE runs SET entry_count=entry_count+1,chain_head=?,status='active',completed_at=NULL WHERE run_id=? AND entry_count=? AND chain_head=?`, hash, runID, event.Sequence, event.PreviousHash)
 	if err != nil {
 		return proof.Event{}, err
 	}
@@ -122,6 +123,11 @@ func (s *Store) Append(ctx context.Context, runID string, input proof.EventInput
 	}
 	event.EventHash = hash
 	return event, nil
+}
+
+func (s *Store) MarkIdle(ctx context.Context, runID string) error {
+	_, err := s.db.ExecContext(ctx, `UPDATE runs SET status='idle' WHERE run_id=? AND status='active'`, runID)
+	return err
 }
 
 func (s *Store) Complete(ctx context.Context, id, status string) (proof.Run, error) {
@@ -221,6 +227,43 @@ func (s *Store) SetCursor(ctx context.Context, adapter, source, cursor string) e
 	return err
 }
 
+func (s *Store) SourceRun(ctx context.Context, adapter, source string) (proof.Run, bool, error) {
+	var runID string
+	err := s.db.QueryRowContext(ctx, `SELECT run_id FROM source_runs WHERE adapter=? AND source=?`, adapter, source).Scan(&runID)
+	if errors.Is(err, sql.ErrNoRows) {
+		return proof.Run{}, false, nil
+	}
+	if err != nil {
+		return proof.Run{}, false, err
+	}
+	run, err := s.Run(ctx, runID)
+	return run, true, err
+}
+
+func (s *Store) BindSourceRun(ctx context.Context, adapter, source, runID string) error {
+	_, err := s.db.ExecContext(ctx, `INSERT INTO source_runs(adapter,source,run_id,created_at) VALUES(?,?,?,?) ON CONFLICT(adapter,source) DO NOTHING`, adapter, source, runID, time.Now().UTC().Format(time.RFC3339Nano))
+	return err
+}
+
+func (s *Store) UpdateRunIdentity(ctx context.Context, runID, agent, harness, model string, metadata map[string]any) error {
+	if metadata == nil {
+		metadata = map[string]any{}
+	}
+	current, err := s.Run(ctx, runID)
+	if err != nil {
+		return err
+	}
+	for key, value := range metadata {
+		current.Metadata[key] = value
+	}
+	encoded, err := proof.CanonicalJSON(current.Metadata)
+	if err != nil {
+		return err
+	}
+	_, err = s.db.ExecContext(ctx, `UPDATE runs SET agent=CASE WHEN ?='' THEN agent ELSE ? END,harness=CASE WHEN ?='' THEN harness ELSE ? END,model=CASE WHEN ?='' THEN model ELSE ? END,metadata=? WHERE run_id=?`, agent, agent, harness, harness, model, model, string(encoded), runID)
+	return err
+}
+
 func (s *Store) PutArtifact(ctx context.Context, expected, mediaType string, body []byte) (string, error) {
 	sum := sha256.Sum256(body)
 	hash := hex.EncodeToString(sum[:])
@@ -238,6 +281,15 @@ func (s *Store) Artifact(ctx context.Context, hash string) ([]byte, string, erro
 	var mediaType string
 	err := s.db.QueryRowContext(ctx, `SELECT body,media_type FROM artifacts WHERE hash=?`, hash).Scan(&body, &mediaType)
 	return body, mediaType, err
+}
+
+func (s *Store) EventExists(ctx context.Context, eventID string) (bool, error) {
+	var one int
+	err := s.db.QueryRowContext(ctx, `SELECT 1 FROM events WHERE event_id=?`, eventID).Scan(&one)
+	if errors.Is(err, sql.ErrNoRows) {
+		return false, nil
+	}
+	return err == nil, err
 }
 func validMode(v string) bool {
 	return v == "observed" || v == "reported" || v == "imported" || v == "derived"
