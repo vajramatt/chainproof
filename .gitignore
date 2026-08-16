@@ -1,0 +1,7 @@
+/chainproof
+*.db
+*.db-shm
+*.db-wal
+dist/
+node_modules/
+.DS_Store
