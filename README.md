@@ -1,56 +1,280 @@
-# ChainProof
+<p align="center">
+  <img src="docs/banner.svg" alt="ChainProof — local provenance for any AI agent" width="760">
+</p>
 
-Local, open-source provenance for any AI agent.
+A local-first provenance ledger for AI agents — Go, SQLite, and a hash chain
+you can verify without trusting ChainProof.
 
-ChainProof records agent and harness events in a SHA-256 hash chain that you
-own. Use Claude Code, Codex, Kimi, Qwen, a local model, or a custom harness—the
-ledger format is deliberately provider-agnostic.
+Run Claude Code, Codex, Kimi, Qwen, OpenClaw, a local model, or your own
+harness. ChainProof gives the run a durable record: what the harness reported,
+how it was collected, what artifacts it produced, and whether that record still
+matches the head you saw before.
 
-> ChainProof proves continuity of the record it receives. It does not prove
-> that an agent reported truthfully or that an imported history is complete.
+<p align="center">
+  <img src="docs/screen.svg" alt="ChainProof TUI showing local runs, chain integrity, and a live provenance feed" width="820">
+</p>
 
-## Included
+It is built to answer three questions after an agent has been at work:
 
-- Local SQLite ledger with serialized, append-only writes
-- Strict verification of genesis, sequence, links, event hashes, count, and head
-- Push API, CLI ingestion, JSONL imports, and wrapped execution
-- Izakaya-style Bubble Tea TUI with Tokyo Night and Synthwave '84 themes
-- Localhost-only web explorer
-- Canonical, implementation-independent proof specification
-- No account, tenant, billing, quota, or cloud dependency
+- **What happened?** Read the run as a sequence of inputs, tool calls, outputs,
+  decisions, artifacts, errors, and human events.
+- **Where did this record come from?** Every event says whether it was
+  `observed`, `reported`, `imported`, or `derived`.
+- **Has it changed?** Recompute the chain from genesis, or hand the exported
+  proof to someone who has never installed or trusted your database.
 
-## Build and run
+No account. No API key. No tenant. No pricing page. The ledger lives on your
+machine and the code is MIT licensed.
+
+## Install
+
+ChainProof is one Go binary. With Go 1.24 or newer:
 
 ```sh
-go build -o chainproof ./cmd/chainproof
-./chainproof init
-./chainproof start --agent research-agent --harness codex --model qwen3-coder
-./chainproof ui
+go install github.com/vajramatt/chainproof/cmd/chainproof@v0.1.0
 ```
 
-The database defaults to `~/.chainproof/chainproof.db`. Override it with
-`CHAINPROOF_DB=/path/to/ledger.db`.
-
-### Push, import, or wrap
+Or build the checkout:
 
 ```sh
-chainproof append RUN_ID '{"kind":"tool.call","source":{"adapter":"custom","mode":"reported"},"payload":{"tool":"shell"}}'
-chainproof ingest RUN_ID < events.jsonl
-chainproof run -- claude
+git clone https://github.com/vajramatt/chainproof.git
+cd chainproof
+make build
+./chainproof
+```
+
+The database opens at `~/.chainproof/chainproof.db`. Set `CHAINPROOF_DB` to
+put it somewhere else.
+
+## Start with a run
+
+The quickest path is to let ChainProof wrap a harness:
+
+```sh
 chainproof run -- codex
+chainproof run -- claude
 chainproof run -- opencode
+chainproof run -- your-agent --task task.json
 ```
 
-Run `chainproof serve` for the local explorer at `http://127.0.0.1:7331`.
+Then open the ledger:
 
-## Trust vocabulary
+```sh
+chainproof                 # the TUI is the front door
+chainproof serve           # local web dashboard at 127.0.0.1:7331
+```
 
-- **Observed:** captured directly while execution occurred.
-- **Reported:** submitted by an agent or harness.
-- **Imported:** collected later from an existing record.
-- **Derived:** calculated from recorded events.
+Wrapping records the process lifecycle and exit status as **observed**. It does
+not magically reveal internal tool calls or private model reasoning. A native
+hook, push integration, or pull adapter provides the richer event stream.
 
-These labels describe collection—not truthfulness. The proof format is a v1
-draft; see [`spec/provenance-v1.md`](spec/provenance-v1.md).
+## The counter
 
-MIT licensed.
+The TUI carries the same operational language as the original ChainProof
+dashboard: stat cards, integrity segments, run status, ledger feed, agent and
+model identity, collection mode, chain head, and selected-run inspection.
+
+```text
+  ⬡ CHAINPROOF  //  TOKYO NIGHT
+  ACTIVE RUNS        COMPLETED          AGENTS             CHAIN INTEGRITY
+  1                  14                 4                  100%
+
+  RUNS                          // LIVE PROVENANCE
+
+  › research-agent              research-agent / 1a58e0c8…
+    active · 46 · 1a58e0c8      HEAD e20b7b0342f4be29…
+                                ▰▰▰▰▰▰▰▰▰▰▰▰▰▰▰▰
+  ✓ coding-agent                ✓ CHAIN VERIFIED
+    completed · 18 · 7bf091aa
+                                0042  REPORTED  tool.call
+                                0043  OBSERVED  artifact.created
+                                0044  IMPORTED  model.output
+
+  j/k navigate · v verify · t theme · q quit
+```
+
+### Keys
+
+| key | what |
+| --- | --- |
+| `j` / `k` · arrows | move through runs |
+| `v` / `r` | reload and verify the selected run |
+| `t` | change the light: Tokyo Night ↔ Synthwave '84 |
+| `q` / `ctrl-c` | leave |
+
+Tokyo Night is the house light. Synthwave '84 repaints the room in violet,
+electric pink, and cyan. The local web dashboard carries both palettes too;
+its switch is remembered in the browser.
+
+## Three ways in
+
+The proof format knows nothing about model vendors. Integrations sit at the
+edge and normalize into one stable event shape.
+
+### Push — the harness tells ChainProof
+
+Create a run and append events over the localhost API or CLI:
+
+```sh
+chainproof start --agent qwen-local --harness my-runner --model qwen3
+
+chainproof append RUN_ID '{
+  "kind": "tool.call",
+  "source": { "adapter": "my-runner", "mode": "reported" },
+  "payload": { "tool": "shell", "command": "git status" }
+}'
+
+chainproof complete RUN_ID
+```
+
+The same operations are available at `POST /api/runs` and
+`POST /api/runs/{id}/events` when `chainproof serve` is running.
+
+### Pull — ChainProof reads a local history
+
+Normalize a harness transcript to one JSON object per line:
+
+```sh
+chainproof pull RUN_ID ~/.local/share/my-agent/events.jsonl my-agent
+```
+
+ChainProof remembers a byte cursor for the adapter and source path. Run it
+again and only appended records come across. Pulled history is always marked
+**imported**, even if the source file claims otherwise.
+
+### Wrap — ChainProof watches the process
+
+```sh
+chainproof run -- codex
+```
+
+The wrapper observes process start, exit, and final status. Today, Claude Code
+and Codex need wrapping or a generic push/pull integration; automatic discovery
+and full-fidelity native adapters are not in v0.1.0.
+
+The adapter contract and integration guidance live in
+[`docs/integrations.md`](docs/integrations.md).
+
+## OpenClaw
+
+The first first-party integration ships in
+[`integrations/openclaw`](integrations/openclaw). Start the local server, build
+the hook, and install that directory in OpenClaw:
+
+```sh
+chainproof serve
+cd integrations/openclaw
+npm ci && npm run build
+```
+
+It records session lifecycle, human messages, tool results, and model outputs.
+Message and tool bodies are hashed by default. Set
+`CHAINPROOF_STORE_CONTENT=true` to store their content as local,
+content-addressed artifacts.
+
+No ChainProof API key is involved. The hook talks to
+`http://127.0.0.1:7331` unless `CHAINPROOF_URL` says otherwise.
+
+## What a proof proves
+
+Each event includes the hash of the event before it:
+
+```text
+genesis = 0000000000000000000000000000000000000000000000000000000000000000
+
+event[0] = sha256(canonical event[0] + genesis)
+event[1] = sha256(canonical event[1] + event[0])
+event[2] = sha256(canonical event[2] + event[1])
+...
+chain head = final event hash
+```
+
+Verification pins the genesis hash and checks contiguous sequence numbers, run
+identity, every previous-hash link, every event hash, the declared entry count,
+and the declared chain head. That catches edits, reordering, missing middle
+records, and prefix truncation.
+
+Export a portable bundle and verify it without opening a database:
+
+```sh
+chainproof export RUN_ID proof.json
+chainproof verify-file proof.json
+```
+
+The verifier works on a clean machine because the proof bundle contains the
+run declaration and canonical events. The format is documented in
+[`spec/provenance-v1.md`](spec/provenance-v1.md).
+
+> ChainProof records what an agent, harness, adapter, or observer reports. A
+> valid chain proves continuity of those recorded bytes. It does **not** prove
+> that the report was truthful, complete, or produced by the model it names.
+
+## Collection marks
+
+| mark | meaning |
+| --- | --- |
+| `observed` | ChainProof captured the event directly while execution occurred |
+| `reported` | an agent or harness submitted the event |
+| `imported` | an adapter collected an existing record after the fact |
+| `derived` | ChainProof calculated the event from other recorded material |
+
+These are provenance labels, not trust scores. A perfectly valid imported chain
+is still an imported chain.
+
+## Local, by design
+
+ChainProof stores runs, canonical events, adapter cursors, and artifacts in a
+local SQLite database using WAL mode and serialized writes. Artifact hashes are
+computed over raw bytes—not decoded text—and content-addressed by SHA-256.
+
+The web server binds to `127.0.0.1:7331` by default and rejects non-local host
+headers. v0.1.0 intentionally has no multi-user authentication; do not expose it
+to a network.
+
+The things ChainProof writes are its own:
+
+- `~/.chainproof/chainproof.db` — ledger, runs, cursors, and artifacts
+- `~/.chainproof/chainproof.db-wal` — SQLite's write-ahead log while active
+- an export path only when you ask for one with `chainproof export`
+
+It does not edit the repositories or harness histories it observes.
+
+## Commands
+
+| command | what |
+| --- | --- |
+| `chainproof` / `chainproof ui` | open the terminal interface |
+| `chainproof serve [address]` | run the local API and web dashboard |
+| `chainproof start` | open a provenance run |
+| `chainproof append` | append one reported event |
+| `chainproof ingest` | import JSONL from stdin |
+| `chainproof pull` | incrementally import a JSONL file |
+| `chainproof run -- …` | wrap any harness or process |
+| `chainproof complete` | close a run with a terminal status |
+| `chainproof verify` | verify a run in the local ledger |
+| `chainproof export` | write a portable proof bundle |
+| `chainproof verify-file` | independently verify a bundle |
+| `chainproof list` | print local runs as JSON |
+
+Run `chainproof --help` for the one-screen version.
+
+## Build the kitchen
+
+```sh
+make check
+cd integrations/openclaw && npm ci && npm run typecheck
+```
+
+The Go suite includes canonicalization, lifecycle, byte-correct artifact,
+tamper, truncation, and wrong-genesis tests. Provider-specific parsing belongs
+behind the adapter contract; changes to canonicalization require a versioned
+format transition and interoperability fixtures.
+
+Contributions are welcome. Start with [`CONTRIBUTING.md`](CONTRIBUTING.md), and
+please report security problems as described in [`SECURITY.md`](SECURITY.md).
+
+## License
+
+[MIT](LICENSE) — use it, fork it, build on it; keep the copyright notice.
+
+© Matt Williamson
