@@ -2,7 +2,7 @@ package store
 
 import (
 	"context"
-	"github.com/ChainProofAI/chainproof/internal/proof"
+	"github.com/vajramatt/chainproof/internal/proof"
 	"testing"
 )
 

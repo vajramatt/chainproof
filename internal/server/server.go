@@ -8,8 +8,8 @@ import (
 	"net/http"
 	"strings"
 
-	"github.com/ChainProofAI/chainproof/internal/proof"
-	"github.com/ChainProofAI/chainproof/internal/store"
+	"github.com/vajramatt/chainproof/internal/proof"
+	"github.com/vajramatt/chainproof/internal/store"
 )
 
 type Server struct {

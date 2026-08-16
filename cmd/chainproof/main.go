@@ -15,10 +15,10 @@ import (
 	"strconv"
 	"strings"
 
-	"github.com/ChainProofAI/chainproof/internal/proof"
-	"github.com/ChainProofAI/chainproof/internal/server"
-	"github.com/ChainProofAI/chainproof/internal/store"
-	"github.com/ChainProofAI/chainproof/internal/tui"
+	"github.com/vajramatt/chainproof/internal/proof"
+	"github.com/vajramatt/chainproof/internal/server"
+	"github.com/vajramatt/chainproof/internal/store"
+	"github.com/vajramatt/chainproof/internal/tui"
 )
 
 const version = "0.1.0"

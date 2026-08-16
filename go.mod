@@ -1,4 +1,4 @@
-module github.com/ChainProofAI/chainproof
+module github.com/vajramatt/chainproof
 
 go 1.24.0
 

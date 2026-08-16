@@ -2,7 +2,7 @@ package adapters
 
 import (
 	"context"
-	"github.com/ChainProofAI/chainproof/internal/proof"
+	"github.com/vajramatt/chainproof/internal/proof"
 )
 
 // Adapter is the boundary between changing harness formats and the stable

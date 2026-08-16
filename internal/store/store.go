@@ -10,8 +10,8 @@ import (
 	"fmt"
 	"time"
 
-	"github.com/ChainProofAI/chainproof/internal/proof"
 	"github.com/google/uuid"
+	"github.com/vajramatt/chainproof/internal/proof"
 	_ "modernc.org/sqlite"
 )
 
