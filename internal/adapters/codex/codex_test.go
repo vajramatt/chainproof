@@ -99,5 +99,28 @@ func TestSyncDiscoversNormalizesAndCursors(t *testing.T) {
 	}
 }
 
+func TestMalformedSessionDoesNotBlockOtherSources(t *testing.T) {
+	root := t.TempDir()
+	if err := os.WriteFile(filepath.Join(root, "a-bad.jsonl"), []byte("not json\n"), 0600); err != nil {
+		t.Fatal(err)
+	}
+	if err := os.WriteFile(filepath.Join(root, "b-good.jsonl"), []byte(sessionMeta+"\n"), 0600); err != nil {
+		t.Fatal(err)
+	}
+	db, err := store.Open(filepath.Join(t.TempDir(), "test.db"))
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer db.Close()
+	collector, _ := New(db, Options{Root: root})
+	stats, err := collector.Sync(context.Background())
+	if err == nil {
+		t.Fatal("expected aggregate source error")
+	}
+	if stats.Errors != 1 || stats.EventsImported != 1 {
+		t.Fatalf("healthy source was blocked: %+v", stats)
+	}
+}
+
 func mustJSON(value any) []byte          { raw, _ := json.Marshal(value); return raw }
 func contains(value, needle string) bool { return strings.Contains(value, needle) }

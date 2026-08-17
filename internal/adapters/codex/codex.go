@@ -33,6 +33,7 @@ type Stats struct {
 	RunsCreated    int `json:"runs_created"`
 	EventsImported int `json:"events_imported"`
 	Skipped        int `json:"skipped"`
+	Errors         int `json:"errors"`
 }
 type Collector struct {
 	store   *store.Store
@@ -87,10 +88,13 @@ func (c *Collector) Sync(ctx context.Context) (Stats, error) {
 		return Stats{}, err
 	}
 	stats := Stats{Sources: len(paths)}
+	var syncErrors []error
 	for _, path := range paths {
 		created, imported, skipped, err := c.syncFile(ctx, path)
 		if err != nil {
-			return stats, fmt.Errorf("%s: %w", path, err)
+			stats.Errors++
+			syncErrors = append(syncErrors, fmt.Errorf("%s: %w", path, err))
+			continue
 		}
 		if created {
 			stats.RunsCreated++
@@ -98,7 +102,7 @@ func (c *Collector) Sync(ctx context.Context) (Stats, error) {
 		stats.EventsImported += imported
 		stats.Skipped += skipped
 	}
-	return stats, nil
+	return stats, errors.Join(syncErrors...)
 }
 func (c *Collector) Watch(ctx context.Context, onSync func(Stats, error)) {
 	sync := func() {

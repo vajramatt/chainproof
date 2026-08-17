@@ -16,15 +16,17 @@ import (
 	"strconv"
 	"strings"
 	"syscall"
+	"time"
 
 	codexadapter "github.com/vajramatt/chainproof/internal/adapters/codex"
 	"github.com/vajramatt/chainproof/internal/proof"
 	"github.com/vajramatt/chainproof/internal/server"
+	"github.com/vajramatt/chainproof/internal/service"
 	"github.com/vajramatt/chainproof/internal/store"
 	"github.com/vajramatt/chainproof/internal/tui"
 )
 
-const version = "0.2.0"
+const version = "0.3.0"
 
 func main() {
 	if err := run(os.Args[1:]); err != nil {
@@ -62,6 +64,9 @@ func run(args []string) error {
 			return errors.New("verification failed")
 		}
 		return nil
+	}
+	if args[0] == "service" {
+		return manageService(args[1:])
 	}
 	dbPath := os.Getenv("CHAINPROOF_DB")
 	if dbPath == "" {
@@ -182,34 +187,18 @@ func run(args []string) error {
 	case "ui":
 		watchCtx, cancel := context.WithCancel(ctx)
 		defer cancel()
-		if collector, collectorErr := newCodexCollector(db); collectorErr == nil && collector != nil {
-			go collector.Watch(watchCtx, nil)
+		if !daemonAvailable() {
+			if collector, collectorErr := newCodexCollector(db); collectorErr == nil && collector != nil {
+				go collector.Watch(watchCtx, nil)
+			}
 		}
 		return tui.Run(db)
-	case "serve":
+	case "serve", "daemon":
 		address := "127.0.0.1:7331"
 		if len(args) > 1 {
 			address = args[1]
 		}
-		watchCtx, cancel := context.WithCancel(ctx)
-		defer cancel()
-		if collector, collectorErr := newCodexCollector(db); collectorErr != nil {
-			return collectorErr
-		} else if collector != nil {
-			go collector.Watch(watchCtx, func(stats codexadapter.Stats, err error) {
-				if err != nil {
-					fmt.Fprintln(os.Stderr, "Codex collector:", err)
-				} else if stats.EventsImported > 0 {
-					fmt.Fprintf(os.Stderr, "Codex collector: %d new events from %d sessions\n", stats.EventsImported, stats.Sources)
-				}
-			})
-		}
-		fmt.Printf("ChainProof web explorer: http://%s (Codex discovery on)\n", address)
-		e = server.New(db, address).ListenAndServe()
-		if errors.Is(e, http.ErrServerClosed) {
-			return nil
-		}
-		return e
+		return runDaemon(ctx, db, address, args[0] == "serve")
 	case "codex":
 		if len(args) < 2 {
 			return errors.New("usage: chainproof codex sync|watch")
@@ -287,11 +276,98 @@ func newCodexCollector(db *store.Store) (*codexadapter.Collector, error) {
 	return codexadapter.New(db, codexadapter.Options{Root: os.Getenv("CHAINPROOF_CODEX_ROOT"), Content: os.Getenv("CHAINPROOF_CODEX_CONTENT")})
 }
 
+func runDaemon(parent context.Context, db *store.Store, address string, announce bool) error {
+	ctx, cancel := signal.NotifyContext(parent, os.Interrupt, syscall.SIGTERM)
+	defer cancel()
+	runtimeStatus := server.NewStatus(version)
+	collector, err := newCodexCollector(db)
+	if err != nil {
+		return err
+	}
+	if collector != nil {
+		runtimeStatus.SetCodexRoot(collector.Root())
+		go collector.Watch(ctx, func(stats codexadapter.Stats, err error) {
+			runtimeStatus.RecordCodex(stats, err)
+			if err != nil {
+				fmt.Fprintln(os.Stderr, "Codex collector:", err)
+			} else if announce && stats.EventsImported > 0 {
+				fmt.Fprintf(os.Stderr, "Codex collector: %d new events from %d sessions\n", stats.EventsImported, stats.Sources)
+			}
+		})
+	}
+	localServer := server.New(db, address, runtimeStatus)
+	errorsCh := make(chan error, 1)
+	go func() { errorsCh <- localServer.ListenAndServe() }()
+	if announce {
+		fmt.Printf("ChainProof: http://%s · Codex %s\n", address, runtimeStatus.Snapshot().Codex.State)
+	}
+	select {
+	case <-ctx.Done():
+		shutdownCtx, stop := context.WithTimeout(context.Background(), 5*time.Second)
+		defer stop()
+		return localServer.Shutdown(shutdownCtx)
+	case err = <-errorsCh:
+		if errors.Is(err, http.ErrServerClosed) {
+			return nil
+		}
+		return err
+	}
+}
+
+func daemonAvailable() bool {
+	client := http.Client{Timeout: 150 * time.Millisecond}
+	response, err := client.Get("http://127.0.0.1:7331/api/status")
+	if err != nil {
+		return false
+	}
+	defer response.Body.Close()
+	return response.StatusCode == http.StatusOK
+}
+
+func manageService(args []string) error {
+	if len(args) == 0 {
+		return errors.New("usage: chainproof service install|start|stop|status|uninstall")
+	}
+	switch args[0] {
+	case "install":
+		executable, err := os.Executable()
+		if err != nil {
+			return err
+		}
+		paths, err := service.Install(executable)
+		if err != nil {
+			return err
+		}
+		fmt.Println("ChainProof service installed:", paths.Config)
+		fmt.Println("Log:", paths.Log)
+		return nil
+	case "start":
+		return service.Start()
+	case "stop":
+		return service.Stop()
+	case "status":
+		status, err := service.Status()
+		fmt.Print(status)
+		return err
+	case "uninstall":
+		if err := service.Uninstall(); err != nil {
+			return err
+		}
+		fmt.Println("ChainProof service removed; local ledger preserved")
+		return nil
+	default:
+		return errors.New("usage: chainproof service install|start|stop|status|uninstall")
+	}
+}
+
 const usage = `ChainProof — local provenance for any AI agent
 
 Usage:
   chainproof ui                              Open the terminal interface
   chainproof serve [127.0.0.1:7331]         Run local API and web dashboard
+  chainproof daemon                         Run collector/API in foreground
+  chainproof service install                Install and start the user service
+  chainproof service status                 Inspect the user service
   chainproof start [--agent A --harness H --model M]
   chainproof append RUN_ID [JSON]            Append one reported event
   chainproof ingest RUN_ID < events.jsonl    Import a JSONL stream
@@ -302,8 +378,8 @@ Usage:
   chainproof export RUN_ID [PROOF.json]      Export a portable proof
   chainproof verify-file PROOF.json          Verify without a database
   chainproof list
-	chainproof codex sync                     Discover/import Codex sessions once
-	chainproof codex watch                    Continuously follow Codex sessions
+  chainproof codex sync                     Discover/import Codex sessions once
+  chainproof codex watch                    Continuously follow Codex sessions
   chainproof version
 `
 

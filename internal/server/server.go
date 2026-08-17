@@ -13,14 +13,19 @@ import (
 )
 
 type Server struct {
-	store *store.Store
-	http  *http.Server
+	store  *store.Store
+	http   *http.Server
+	status *Status
 }
 
-func New(db *store.Store, address string) *Server {
-	s := &Server{store: db}
+func New(db *store.Store, address string, status *Status) *Server {
+	if status == nil {
+		status = NewStatus("unknown")
+	}
+	s := &Server{store: db, status: status}
 	mux := http.NewServeMux()
 	mux.HandleFunc("GET /api/runs", s.listRuns)
+	mux.HandleFunc("GET /api/status", s.getStatus)
 	mux.HandleFunc("POST /api/runs", s.startRun)
 	mux.HandleFunc("GET /api/runs/{id}", s.getRun)
 	mux.HandleFunc("POST /api/runs/{id}/events", s.appendEvent)
@@ -32,6 +37,9 @@ func New(db *store.Store, address string) *Server {
 	mux.HandleFunc("GET /", web)
 	s.http = &http.Server{Addr: address, Handler: localhostOnly(cors(mux))}
 	return s
+}
+func (s *Server) getStatus(w http.ResponseWriter, r *http.Request) {
+	respond(w, s.status.Snapshot(), nil, http.StatusOK)
 }
 func (s *Server) ListenAndServe() error              { return s.http.ListenAndServe() }
 func (s *Server) Shutdown(ctx context.Context) error { return s.http.Shutdown(ctx) }

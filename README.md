@@ -28,10 +28,16 @@ machine and the code is MIT licensed.
 
 ## Install
 
-ChainProof is one Go binary. With Go 1.24 or newer:
+ChainProof is one Go binary. Install the latest release on macOS or Linux:
 
 ```sh
-go install github.com/vajramatt/chainproof/cmd/chainproof@v0.2.0
+curl -fsSL https://raw.githubusercontent.com/vajramatt/chainproof/main/scripts/install.sh | sh
+```
+
+Or, with Go 1.24 or newer:
+
+```sh
+go install github.com/vajramatt/chainproof/cmd/chainproof@v0.3.0
 ```
 
 Or build the checkout:
@@ -80,6 +86,37 @@ Use a nonstandard Codex home—or turn discovery off—with:
 ```sh
 CHAINPROOF_CODEX_ROOT=/path/to/codex/sessions chainproof
 CHAINPROOF_CODEX_DISABLED=1 chainproof
+```
+
+## Keep it running
+
+Install ChainProof as a per-user background service:
+
+```sh
+chainproof service install
+```
+
+On macOS this creates a private user LaunchAgent; on Linux it creates and
+enables a systemd user service. It starts at login, follows Codex while the TUI
+is closed, owns the localhost API, and keeps the ledger current.
+
+```sh
+chainproof service status
+chainproof service stop
+chainproof service start
+chainproof service uninstall   # the SQLite ledger is preserved
+```
+
+With the service running, `chainproof` detects it and opens the TUI without
+starting a second collector. The web dashboard remains at
+`http://127.0.0.1:7331`, and machine-readable health lives at
+`http://127.0.0.1:7331/api/status`.
+
+For supervisors, containers, or debugging, run the same process in the
+foreground:
+
+```sh
+chainproof daemon
 ```
 
 ## Wrap another agent
@@ -287,7 +324,7 @@ local SQLite database using WAL mode and serialized writes. Artifact hashes are
 computed over raw bytes—not decoded text—and content-addressed by SHA-256.
 
 The web server binds to `127.0.0.1:7331` by default and rejects non-local host
-headers. v0.2.0 intentionally has no multi-user authentication; do not expose it
+headers. v0.3.0 intentionally has no multi-user authentication; do not expose it
 to a network.
 
 The things ChainProof writes are its own:
@@ -304,6 +341,9 @@ It does not edit the repositories or harness histories it observes.
 | --- | --- |
 | `chainproof` / `chainproof ui` | open the terminal interface |
 | `chainproof serve [address]` | run the local API and web dashboard |
+| `chainproof daemon` | run the collector and local API in the foreground |
+| `chainproof service install` | install and start a login service |
+| `chainproof service status` | inspect the native user service |
 | `chainproof start` | open a provenance run |
 | `chainproof append` | append one reported event |
 | `chainproof ingest` | import JSONL from stdin |
