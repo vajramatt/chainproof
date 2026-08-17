@@ -28,12 +28,22 @@ func Open(path string) (*Store, error) {
 	CREATE TABLE IF NOT EXISTS events(event_id TEXT PRIMARY KEY,run_id TEXT NOT NULL REFERENCES runs(run_id),sequence INTEGER NOT NULL,timestamp TEXT NOT NULL,kind TEXT NOT NULL,collection_mode TEXT NOT NULL,event_json TEXT NOT NULL,event_hash TEXT NOT NULL,UNIQUE(run_id,sequence));
 		CREATE TABLE IF NOT EXISTS import_cursors(adapter TEXT NOT NULL,source TEXT NOT NULL,cursor TEXT NOT NULL,updated_at TEXT NOT NULL,PRIMARY KEY(adapter,source));
 		CREATE TABLE IF NOT EXISTS source_runs(adapter TEXT NOT NULL,source TEXT NOT NULL,run_id TEXT NOT NULL REFERENCES runs(run_id),created_at TEXT NOT NULL,PRIMARY KEY(adapter,source));
-		CREATE TABLE IF NOT EXISTS artifacts(hash TEXT PRIMARY KEY,media_type TEXT NOT NULL,body BLOB NOT NULL,size INTEGER NOT NULL,created_at TEXT NOT NULL);
-	CREATE INDEX IF NOT EXISTS events_run_sequence ON events(run_id,sequence);`); err != nil {
+	CREATE TABLE IF NOT EXISTS artifacts(hash TEXT PRIMARY KEY,media_type TEXT NOT NULL,body BLOB NOT NULL,size INTEGER NOT NULL,created_at TEXT NOT NULL);
+	CREATE TABLE IF NOT EXISTS provenance_index(event_id TEXT PRIMARY KEY REFERENCES events(event_id) ON DELETE CASCADE,run_id TEXT NOT NULL REFERENCES runs(run_id),sequence INTEGER NOT NULL,timestamp TEXT NOT NULL,agent TEXT NOT NULL,harness TEXT NOT NULL,model TEXT NOT NULL,kind TEXT NOT NULL,collection_mode TEXT NOT NULL,tool TEXT NOT NULL,status TEXT NOT NULL,summary TEXT NOT NULL,search_text TEXT NOT NULL);
+	CREATE INDEX IF NOT EXISTS events_run_sequence ON events(run_id,sequence);
+	CREATE INDEX IF NOT EXISTS provenance_run_sequence ON provenance_index(run_id,sequence);
+	CREATE INDEX IF NOT EXISTS provenance_kind ON provenance_index(kind);
+	CREATE INDEX IF NOT EXISTS provenance_tool ON provenance_index(tool);
+	CREATE INDEX IF NOT EXISTS provenance_timestamp ON provenance_index(timestamp);`); err != nil {
 		db.Close()
 		return nil, err
 	}
-	return &Store{db: db}, nil
+	s := &Store{db: db}
+	if err = s.rebuildMissingIndex(context.Background()); err != nil {
+		db.Close()
+		return nil, err
+	}
+	return s, nil
 }
 func (s *Store) Close() error { return s.db.Close() }
 
@@ -108,6 +118,9 @@ func (s *Store) Append(ctx context.Context, runID string, input proof.EventInput
 		return proof.Event{}, err
 	}
 	if _, err = tx.ExecContext(ctx, `INSERT INTO events VALUES(?,?,?,?,?,?,?,?)`, event.ID, runID, event.Sequence, now.Format(time.RFC3339Nano), event.Kind, event.Source.Mode, string(raw), hash); err != nil {
+		return proof.Event{}, err
+	}
+	if err = indexEvent(ctx, tx, event, run); err != nil {
 		return proof.Event{}, err
 	}
 	result, err := tx.ExecContext(ctx, `UPDATE runs SET entry_count=entry_count+1,chain_head=?,status='active',completed_at=NULL WHERE run_id=? AND entry_count=? AND chain_head=?`, hash, runID, event.Sequence, event.PreviousHash)
@@ -190,6 +203,20 @@ func (s *Store) Events(ctx context.Context, id string) ([]proof.Event, error) {
 	}
 	return events, rows.Err()
 }
+
+func (s *Store) Event(ctx context.Context, id string) (proof.Event, error) {
+	var raw, hash string
+	err := s.db.QueryRowContext(ctx, `SELECT event_json,event_hash FROM events WHERE event_id=?`, id).Scan(&raw, &hash)
+	if err != nil {
+		return proof.Event{}, err
+	}
+	var event proof.Event
+	if err = json.Unmarshal([]byte(raw), &event); err != nil {
+		return proof.Event{}, err
+	}
+	event.EventHash = hash
+	return event, nil
+}
 func (s *Store) Verify(ctx context.Context, id string) proof.Verification {
 	run, e := s.Run(ctx, id)
 	if e != nil {
@@ -260,8 +287,18 @@ func (s *Store) UpdateRunIdentity(ctx context.Context, runID, agent, harness, mo
 	if err != nil {
 		return err
 	}
-	_, err = s.db.ExecContext(ctx, `UPDATE runs SET agent=CASE WHEN ?='' THEN agent ELSE ? END,harness=CASE WHEN ?='' THEN harness ELSE ? END,model=CASE WHEN ?='' THEN model ELSE ? END,metadata=? WHERE run_id=?`, agent, agent, harness, harness, model, model, string(encoded), runID)
-	return err
+	tx, err := s.db.BeginTx(ctx, nil)
+	if err != nil {
+		return err
+	}
+	defer tx.Rollback()
+	if _, err = tx.ExecContext(ctx, `UPDATE runs SET agent=CASE WHEN ?='' THEN agent ELSE ? END,harness=CASE WHEN ?='' THEN harness ELSE ? END,model=CASE WHEN ?='' THEN model ELSE ? END,metadata=? WHERE run_id=?`, agent, agent, harness, harness, model, model, string(encoded), runID); err != nil {
+		return err
+	}
+	if _, err = tx.ExecContext(ctx, `UPDATE provenance_index SET agent=CASE WHEN ?='' THEN agent ELSE ? END,harness=CASE WHEN ?='' THEN harness ELSE ? END,model=CASE WHEN ?='' THEN model ELSE ? END WHERE run_id=?`, agent, agent, harness, harness, model, model, runID); err != nil {
+		return err
+	}
+	return tx.Commit()
 }
 
 func (s *Store) PutArtifact(ctx context.Context, expected, mediaType string, body []byte) (string, error) {

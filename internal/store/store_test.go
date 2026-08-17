@@ -2,8 +2,10 @@ package store
 
 import (
 	"context"
-	"github.com/vajramatt/chainproof/internal/proof"
+	"strings"
 	"testing"
+
+	"github.com/vajramatt/chainproof/internal/proof"
 )
 
 func TestLifecycleAndVerification(t *testing.T) {
@@ -82,5 +84,68 @@ func TestArtifactsAreByteCorrectAndContentAddressed(t *testing.T) {
 	}
 	if _, e = s.PutArtifact(ctx, "wrong", "", body); e == nil {
 		t.Fatal("expected content hash mismatch")
+	}
+}
+
+func TestSearchStructuredProvenance(t *testing.T) {
+	s, e := Open(t.TempDir() + "/test.db")
+	if e != nil {
+		t.Fatal(e)
+	}
+	defer s.Close()
+	ctx := context.Background()
+	r, _ := s.Start(ctx, "repo-agent", "codex", "gpt-test", nil)
+	s.Append(ctx, r.ID, proof.EventInput{Kind: "tool.result", Source: proof.Source{Adapter: "codex", Mode: "imported"}, Payload: map[string]any{"tool": "shell", "status": "completed", "command": map[string]any{"sha256": "abc123", "bytes": 42}}})
+	s.Append(ctx, r.ID, proof.EventInput{Kind: "artifact.changed", Source: proof.Source{Adapter: "codex", Mode: "imported"}, Payload: map[string]any{"path": "internal/store/search.go", "status": "completed"}})
+	result, e := s.Search(ctx, SearchQuery{Text: "abc123", Tool: "shell"})
+	if e != nil {
+		t.Fatal(e)
+	}
+	if result.Total != 1 || len(result.Hits) != 1 || result.Hits[0].Tool != "shell" {
+		t.Fatalf("unexpected search: %+v", result)
+	}
+	if !strings.Contains(result.Hits[0].Summary, "completed") {
+		t.Fatalf("missing evidence summary: %s", result.Hits[0].Summary)
+	}
+	result, e = s.Search(ctx, SearchQuery{Text: "search.go", Kind: "artifact.changed"})
+	if e != nil || result.Total != 1 {
+		t.Fatalf("path search failed: %+v %v", result, e)
+	}
+}
+
+func TestOpenBackfillsProvenanceIndex(t *testing.T) {
+	path := t.TempDir() + "/test.db"
+	s, _ := Open(path)
+	r, _ := s.Start(context.Background(), "agent", "harness", "model", nil)
+	s.Append(context.Background(), r.ID, proof.EventInput{Kind: "decision", Source: proof.Source{Mode: "observed"}, Payload: map[string]any{"choice": "local-first"}})
+	s.db.Exec(`DELETE FROM provenance_index`)
+	s.Close()
+	s, e := Open(path)
+	if e != nil {
+		t.Fatal(e)
+	}
+	defer s.Close()
+	result, e := s.Search(context.Background(), SearchQuery{Text: "local-first"})
+	if e != nil || result.Total != 1 {
+		t.Fatalf("backfill failed: %+v %v", result, e)
+	}
+}
+
+func TestRunLineageFromPortableMetadata(t *testing.T) {
+	s, e := Open(t.TempDir() + "/test.db")
+	if e != nil {
+		t.Fatal(e)
+	}
+	defer s.Close()
+	ctx := context.Background()
+	parent, _ := s.Start(ctx, "orchestrator", "generic", "local", nil)
+	child, _ := s.Start(ctx, "worker", "generic", "local", map[string]any{"parent_run_id": parent.ID})
+	lineage, e := s.Lineage(ctx, child.ID)
+	if e != nil || lineage.Parent == nil || lineage.Parent.ID != parent.ID {
+		t.Fatalf("child lineage: %+v %v", lineage, e)
+	}
+	lineage, e = s.Lineage(ctx, parent.ID)
+	if e != nil || len(lineage.Children) != 1 || lineage.Children[0].ID != child.ID {
+		t.Fatalf("parent lineage: %+v %v", lineage, e)
 	}
 }

@@ -37,7 +37,7 @@ curl -fsSL https://raw.githubusercontent.com/vajramatt/chainproof/main/scripts/i
 Or, with Go 1.24 or newer:
 
 ```sh
-go install github.com/vajramatt/chainproof/cmd/chainproof@v0.3.0
+go install github.com/vajramatt/chainproof/cmd/chainproof@v0.4.0
 ```
 
 Or build the checkout:
@@ -163,7 +163,7 @@ model identity, collection mode, chain head, and selected-run inspection.
                                 0043  OBSERVED  artifact.created
                                 0044  IMPORTED  model.output
 
-  j/k navigate · v verify · t theme · q quit
+  j/k navigate · / investigate · v verify · t theme · q quit
 ```
 
 ### Keys
@@ -171,6 +171,7 @@ model identity, collection mode, chain head, and selected-run inspection.
 | key | what |
 | --- | --- |
 | `j` / `k` · arrows | move through runs |
+| `/` | search all provenance evidence; Enter locks, Escape clears |
 | `v` / `r` | reload and verify the selected run |
 | `t` | change the light: Tokyo Night ↔ Synthwave '84 |
 | `q` / `ctrl-c` | leave |
@@ -178,6 +179,31 @@ model identity, collection mode, chain head, and selected-run inspection.
 Tokyo Night is the house light. Synthwave '84 repaints the room in violet,
 electric pink, and cyan. The local web dashboard carries both palettes too;
 its switch is remembered in the browser.
+
+## Investigate what happened
+
+The append-only ledger is the source of truth. Alongside it, ChainProof keeps
+a rebuildable SQLite provenance index so the evidence is useful while an
+incident—or an agent—is still moving.
+
+Press `/` in the TUI, open **Investigate** in the web dashboard, or query from
+the shell:
+
+```sh
+chainproof search "failed"
+chainproof search "internal/store/search.go"
+chainproof search "e4be0f5dbd629073"
+```
+
+The web interface combines free-text search with facets for agent, event kind,
+tool, status, and collection mode. Selecting a result reveals its canonical
+payload, native source identity, previous hash, and event hash. You can search
+tool names, paths, working directories, outcomes, and hashes even when message
+content is protected by the default hashes-only policy.
+
+The index is deliberately not part of the proof. It can be deleted and rebuilt
+from canonical ledger events without changing a chain head. See
+[`docs/investigation.md`](docs/investigation.md) for the boundary and query API.
 
 ## Four ways in
 
@@ -324,12 +350,12 @@ local SQLite database using WAL mode and serialized writes. Artifact hashes are
 computed over raw bytes—not decoded text—and content-addressed by SHA-256.
 
 The web server binds to `127.0.0.1:7331` by default and rejects non-local host
-headers. v0.3.0 intentionally has no multi-user authentication; do not expose it
+headers. v0.4.0 intentionally has no multi-user authentication; do not expose it
 to a network.
 
 The things ChainProof writes are its own:
 
-- `~/.chainproof/chainproof.db` — ledger, runs, cursors, and artifacts
+- `~/.chainproof/chainproof.db` — ledger, rebuildable search index, cursors, and artifacts
 - `~/.chainproof/chainproof.db-wal` — SQLite's write-ahead log while active
 - an export path only when you ask for one with `chainproof export`
 
@@ -354,6 +380,7 @@ It does not edit the repositories or harness histories it observes.
 | `chainproof export` | write a portable proof bundle |
 | `chainproof verify-file` | independently verify a bundle |
 | `chainproof list` | print local runs as JSON |
+| `chainproof search QUERY` | search structured local provenance evidence |
 | `chainproof codex sync` | discover and import Codex sessions once |
 | `chainproof codex watch` | continuously follow Codex sessions |
 

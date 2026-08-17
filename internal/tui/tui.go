@@ -22,6 +22,7 @@ var themes = []theme{{"Tokyo Night", "#16161e", "#1a1b26", "#c0caf5", "#565f89",
 type loaded struct {
 	runs   []proof.Run
 	events []proof.Event
+	search store.SearchResult
 	verify proof.Verification
 	valid  int
 	err    error
@@ -32,6 +33,9 @@ type model struct {
 	runs                           []proof.Run
 	events                         []proof.Event
 	verify                         proof.Verification
+	search                         store.SearchResult
+	query                          string
+	searching                      bool
 	selected, theme, width, height int
 	err                            error
 	valid                          int
@@ -56,14 +60,18 @@ func (m model) load() tea.Msg {
 			}
 		}
 	}
-	return loaded{runs, events, verification, valid, e}
+	var search store.SearchResult
+	if e == nil && m.query != "" {
+		search, e = m.store.Search(context.Background(), store.SearchQuery{Text: m.query, Limit: 100})
+	}
+	return loaded{runs, events, search, verification, valid, e}
 }
 func (m model) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 	switch v := msg.(type) {
 	case tea.WindowSizeMsg:
 		m.width, m.height = v.Width, v.Height
 	case loaded:
-		m.runs, m.events, m.verify, m.valid, m.err = v.runs, v.events, v.verify, v.valid, v.err
+		m.runs, m.events, m.search, m.verify, m.valid, m.err = v.runs, v.events, v.search, v.verify, v.valid, v.err
 		if len(m.runs) == 0 {
 			m.selected = 0
 		} else if m.selected >= len(m.runs) {
@@ -73,6 +81,28 @@ func (m model) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 	case tick:
 		return m, m.load
 	case tea.KeyMsg:
+		if m.searching {
+			switch v.String() {
+			case "esc":
+				m.searching, m.query = false, ""
+				return m, m.load
+			case "enter":
+				m.searching = false
+				return m, m.load
+			case "backspace":
+				if len(m.query) > 0 {
+					runes := []rune(m.query)
+					m.query = string(runes[:len(runes)-1])
+				}
+				return m, m.load
+			default:
+				if len(v.Runes) > 0 {
+					m.query += string(v.Runes)
+					return m, m.load
+				}
+			}
+			return m, nil
+		}
 		switch v.String() {
 		case "q", "ctrl+c":
 			return m, tea.Quit
@@ -88,6 +118,14 @@ func (m model) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 			}
 		case "t":
 			m.theme = (m.theme + 1) % len(themes)
+		case "/":
+			m.searching = true
+			return m, nil
+		case "esc":
+			if m.query != "" {
+				m.query = ""
+				return m, m.load
+			}
 		case "r", "v":
 			return m, m.load
 		}
@@ -100,13 +138,21 @@ func (m model) View() string {
 	if m.width == 0 {
 		return "Starting ChainProof…"
 	}
-	head := lipgloss.NewStyle().Bold(true).Foreground(t.Primary).Background(t.Panel).Width(m.width).Padding(0, 2).Render("⬡ CHAINPROOF  //  " + strings.ToUpper(t.Name))
+	search := ""
+	if m.query != "" || m.searching {
+		cursor := ""
+		if m.searching {
+			cursor = "█"
+		}
+		search = "  / " + m.query + cursor
+	}
+	head := lipgloss.NewStyle().Bold(true).Foreground(t.Primary).Background(t.Panel).Width(m.width).Padding(0, 2).Render("⬡ CHAINPROOF  //  " + strings.ToUpper(t.Name) + search)
 	stats := m.statsView(t)
 	leftW := max(30, min(46, m.width/3))
 	left := m.runsView(t, leftW)
 	right := m.detailView(t, max(30, m.width-leftW-1))
 	body := lipgloss.JoinHorizontal(lipgloss.Top, left, right)
-	foot := lipgloss.NewStyle().Foreground(t.Muted).Background(t.Panel).Width(m.width).Padding(0, 2).Render("j/k navigate  ·  v verify  ·  t theme  ·  q quit")
+	foot := lipgloss.NewStyle().Foreground(t.Muted).Background(t.Panel).Width(m.width).Padding(0, 2).Render("j/k navigate  ·  / investigate  ·  esc clear  ·  v verify  ·  t theme  ·  q quit")
 	return base.Width(m.width).Height(m.height).Render(head + "\n" + stats + "\n" + body + "\n" + foot)
 }
 func (m model) statsView(t theme) string {
@@ -157,6 +203,24 @@ func (m model) runsView(t theme, w int) string {
 	return lipgloss.NewStyle().Background(t.Panel).BorderRight(true).BorderForeground(t.Muted).Width(w).Height(max(4, m.height-7)).Padding(1, 2).Render(strings.Join(lines, "\n"))
 }
 func (m model) detailView(t theme, w int) string {
+	if m.query != "" {
+		lines := []string{lipgloss.NewStyle().Bold(true).Foreground(t.Primary).Render("// INVESTIGATE EVIDENCE"), lipgloss.NewStyle().Foreground(t.Muted).Render(fmt.Sprintf("%d matches for %q", m.search.Total, m.query)), ""}
+		maxHits := max(3, m.height-13)
+		for _, hit := range m.search.Hits[:min(len(m.search.Hits), maxHits)] {
+			color := t.Secondary
+			if hit.Status == "failed" {
+				color = t.Danger
+			}
+			lines = append(lines,
+				lipgloss.NewStyle().Foreground(color).Render(fmt.Sprintf("#%04d  %-18s %s", hit.Sequence, trim(hit.Kind, 18), trim(hit.Tool, 12))),
+				lipgloss.NewStyle().Foreground(t.Text).Render("  "+trim(hit.Summary, w-4)),
+				lipgloss.NewStyle().Foreground(t.Muted).Render("  "+trim(hit.Agent+" · "+hit.CollectionMode+" · "+hit.RunID[:8], w-4)), "")
+		}
+		if len(m.search.Hits) == 0 {
+			lines = append(lines, "No matching provenance evidence.")
+		}
+		return lipgloss.NewStyle().Width(w).Height(max(4, m.height-7)).Padding(1, 2).Render(strings.Join(lines, "\n"))
+	}
 	if len(m.runs) == 0 {
 		return lipgloss.NewStyle().Width(w).Padding(2).Render("No provenance runs yet.\n\nchainproof start --agent my-agent")
 	}

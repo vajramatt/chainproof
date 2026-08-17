@@ -26,7 +26,7 @@ import (
 	"github.com/vajramatt/chainproof/internal/tui"
 )
 
-const version = "0.3.0"
+const version = "0.4.0"
 
 func main() {
 	if err := run(os.Args[1:]); err != nil {
@@ -183,6 +183,13 @@ func run(args []string) error {
 		return nil
 	case "list":
 		v, e := db.Runs(ctx, 100)
+		return output(v, e)
+	case "search":
+		query := strings.TrimSpace(strings.Join(args[1:], " "))
+		if query == "" {
+			return errors.New("usage: chainproof search QUERY")
+		}
+		v, e := db.Search(ctx, store.SearchQuery{Text: query, Limit: 100})
 		return output(v, e)
 	case "ui":
 		watchCtx, cancel := context.WithCancel(ctx)
@@ -378,6 +385,7 @@ Usage:
   chainproof export RUN_ID [PROOF.json]      Export a portable proof
   chainproof verify-file PROOF.json          Verify without a database
   chainproof list
+	chainproof search QUERY                    Search local provenance evidence
   chainproof codex sync                     Discover/import Codex sessions once
   chainproof codex watch                    Continuously follow Codex sessions
   chainproof version

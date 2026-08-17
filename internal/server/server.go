@@ -6,6 +6,7 @@ import (
 	"encoding/json"
 	"io"
 	"net/http"
+	"strconv"
 	"strings"
 
 	"github.com/vajramatt/chainproof/internal/proof"
@@ -26,8 +27,11 @@ func New(db *store.Store, address string, status *Status) *Server {
 	mux := http.NewServeMux()
 	mux.HandleFunc("GET /api/runs", s.listRuns)
 	mux.HandleFunc("GET /api/status", s.getStatus)
+	mux.HandleFunc("GET /api/search", s.search)
+	mux.HandleFunc("GET /api/events/{id}", s.getEvent)
 	mux.HandleFunc("POST /api/runs", s.startRun)
 	mux.HandleFunc("GET /api/runs/{id}", s.getRun)
+	mux.HandleFunc("GET /api/runs/{id}/lineage", s.lineage)
 	mux.HandleFunc("POST /api/runs/{id}/events", s.appendEvent)
 	mux.HandleFunc("GET /api/runs/{id}/events", s.events)
 	mux.HandleFunc("POST /api/runs/{id}/complete", s.complete)
@@ -37,6 +41,23 @@ func New(db *store.Store, address string, status *Status) *Server {
 	mux.HandleFunc("GET /", web)
 	s.http = &http.Server{Addr: address, Handler: localhostOnly(cors(mux))}
 	return s
+}
+
+func (s *Server) search(w http.ResponseWriter, r *http.Request) {
+	limit, _ := strconv.Atoi(r.URL.Query().Get("limit"))
+	query := store.SearchQuery{
+		Text: r.URL.Query().Get("q"), RunID: r.URL.Query().Get("run_id"),
+		Agent: r.URL.Query().Get("agent"), Kind: r.URL.Query().Get("kind"),
+		Tool: r.URL.Query().Get("tool"), Status: r.URL.Query().Get("status"),
+		Mode: r.URL.Query().Get("mode"), Limit: limit,
+	}
+	v, e := s.store.Search(r.Context(), query)
+	respond(w, v, e, http.StatusOK)
+}
+
+func (s *Server) getEvent(w http.ResponseWriter, r *http.Request) {
+	v, e := s.store.Event(r.Context(), r.PathValue("id"))
+	respond(w, v, e, http.StatusOK)
 }
 func (s *Server) getStatus(w http.ResponseWriter, r *http.Request) {
 	respond(w, s.status.Snapshot(), nil, http.StatusOK)
@@ -63,6 +84,11 @@ func (s *Server) startRun(w http.ResponseWriter, r *http.Request) {
 }
 func (s *Server) getRun(w http.ResponseWriter, r *http.Request) {
 	v, e := s.store.Run(r.Context(), r.PathValue("id"))
+	respond(w, v, e, http.StatusOK)
+}
+
+func (s *Server) lineage(w http.ResponseWriter, r *http.Request) {
+	v, e := s.store.Lineage(r.Context(), r.PathValue("id"))
 	respond(w, v, e, http.StatusOK)
 }
 func (s *Server) appendEvent(w http.ResponseWriter, r *http.Request) {
