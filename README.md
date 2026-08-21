@@ -37,7 +37,7 @@ curl -fsSL https://raw.githubusercontent.com/vajramatt/chainproof/main/scripts/i
 Or, with Go 1.24 or newer:
 
 ```sh
-go install github.com/vajramatt/chainproof/cmd/chainproof@v0.4.1
+go install github.com/vajramatt/chainproof/cmd/chainproof@v0.5.0
 ```
 
 Or build the checkout:
@@ -143,27 +143,19 @@ hook, push integration, or pull adapter provides the richer event stream.
 
 ## The counter
 
-The TUI carries the same operational language as the original ChainProof
-dashboard: stat cards, integrity segments, run status, ledger feed, agent and
-model identity, collection mode, chain head, and selected-run inspection.
+The TUI is a deterministic run cockpit: repository and objective fingerprint,
+duration, tool/change/failure/policy signals, chain integrity, a full-width
+evidence table, operational filters, canonical event inspection, and proof
+export. Every summary fact resolves to ledger evidence.
 
 ```text
-  ⬡ CHAINPROOF  //  TOKYO NIGHT
-  ACTIVE RUNS        COMPLETED          AGENTS             CHAIN INTEGRITY
-  1                  14                 4                  100%
-
-  RUNS                          // LIVE PROVENANCE
-
-  › research-agent              research-agent / 1a58e0c8…
-    active · 46 · 1a58e0c8      HEAD e20b7b0342f4be29…
-                                ▰▰▰▰▰▰▰▰▰▰▰▰▰▰▰▰
-  ✓ coding-agent                ✓ CHAIN VERIFIED
-    completed · 18 · 7bf091aa
-                                0042  REPORTED  tool.call
-                                0043  OBSERVED  artifact.created
-                                0044  IMPORTED  model.output
-
-  j/k navigate · / investigate · v verify · t theme · q quit
+  ⬡ CHAINPROOF  TOKYO NIGHT  27 RUNS  1 ACTIVE  11 AGENTS  100% INTEGRITY
+  RUNS                    // LIVE PROVENANCE
+  ▌ chainproof  428       428 EVENTS · 196 TOOLS · 13 FAILURES · 4m12s
+    lodestone    70       REPO      /work/chainproof
+    stillpoint   25       OBJECTIVE sha256:4b7885c… · 62 B
+                          EVIDENCE · FAILURES
+                          0400 11:38:15 IMPORTED tool.result shell · failed
 ```
 
 ### Keys
@@ -171,7 +163,11 @@ model identity, collection mode, chain head, and selected-run inspection.
 | key | what |
 | --- | --- |
 | `j` / `k` · arrows | move through runs |
-| `/` | search all provenance evidence; Enter locks, Escape clears |
+| `Tab` | switch focus between runs and evidence |
+| `Enter` | inspect the selected canonical event |
+| `f` / `c` / `d` / `p` / `a` | failures / changes / decisions / policy / all |
+| `/` | search evidence; supports `tool:`, `status:`, `agent:`, `kind:`, `mode:`, `file:` |
+| `x` | export the selected portable proof to `~/.chainproof/exports` |
 | `v` / `r` | reload and verify the selected run |
 | `t` | change the light: Tokyo Night ↔ Synthwave '84 |
 | `q` / `ctrl-c` | leave |
@@ -350,7 +346,7 @@ local SQLite database using WAL mode and serialized writes. Artifact hashes are
 computed over raw bytes—not decoded text—and content-addressed by SHA-256.
 
 The web server binds to `127.0.0.1:7331` by default and rejects non-local host
-headers. v0.4.1 intentionally has no multi-user authentication; do not expose it
+headers. v0.5.0 intentionally has no multi-user authentication; do not expose it
 to a network.
 
 The things ChainProof writes are its own:

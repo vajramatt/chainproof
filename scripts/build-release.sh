@@ -3,7 +3,7 @@ set -eu
 
 version="${1:-$(git describe --tags --exact-match 2>/dev/null || true)}"
 if [ -z "$version" ]; then
-  echo "usage: scripts/build-release.sh v0.4.1" >&2
+  echo "usage: scripts/build-release.sh v0.5.0" >&2
   exit 2
 fi
 
