@@ -2,19 +2,31 @@
   <img src="docs/banner.svg" alt="ChainProof — local provenance for any AI agent" width="760">
 </p>
 
-A local-first provenance ledger for AI agents — Go, SQLite, and a hash chain
-you can verify without trusting ChainProof.
+<p align="center">
+  <strong>See what the agent did. Know where the record came from. Verify it did not change.</strong>
+</p>
 
-Run Claude Code, Codex, Kimi, Qwen, OpenClaw, a local model, or your own
-harness. ChainProof gives the run a durable record: what the harness reported,
-how it was collected, what artifacts it produced, and whether that record still
-matches the head you saw before.
+<p align="center">
+  <a href="#install">Install</a> ·
+  <a href="#the-run-cockpit">Run cockpit</a> ·
+  <a href="#bring-any-agent">Integrations</a> ·
+  <a href="spec/provenance-v1.md">Proof format</a>
+</p>
+
+ChainProof is a local-first provenance ledger and investigation cockpit for AI
+agents — one Go binary, one SQLite database, and a hash chain you can verify
+without trusting ChainProof.
+
+Run Codex, Claude Code, Kimi, Qwen, OpenClaw, a local model, or your own
+harness. ChainProof turns agent activity into a durable operational record:
+inputs, tools, commands, changes, outputs, failures, policy signals, artifacts,
+collection source, and cryptographic continuity.
 
 <p align="center">
   <img src="docs/screen.svg" alt="ChainProof TUI showing local runs, chain integrity, and a live provenance feed" width="820">
 </p>
 
-It is built to answer three questions after an agent has been at work:
+It is built to answer four questions after an agent has been at work:
 
 - **What happened?** Read the run as a sequence of inputs, tool calls, outputs,
   decisions, artifacts, errors, and human events.
@@ -22,9 +34,18 @@ It is built to answer three questions after an agent has been at work:
   `observed`, `reported`, `imported`, or `derived`.
 - **Has it changed?** Recompute the chain from genesis, or hand the exported
   proof to someone who has never installed or trusted your database.
+- **Is it ready to ship?** Jump to failures, changes, decisions, and policy
+  evidence without digging through a raw agent transcript.
 
 No account. No API key. No tenant. No pricing page. The ledger lives on your
 machine and the code is MIT licensed.
+
+Ordinary logs tell you what a process printed. ChainProof preserves the
+provenance around it: who or what produced an event, which adapter collected
+it, whether collection was live or retrospective, where it sits in the run,
+and the exact hash link that would change if history were rewritten. The
+search index and cockpit are disposable views; the canonical ledger remains
+the evidence.
 
 ## Install
 
@@ -49,8 +70,9 @@ make build
 ./chainproof
 ```
 
-The database opens at `~/.chainproof/chainproof.db`. Set `CHAINPROOF_DB` to
-put it somewhere else.
+The installer verifies the release archive against its published SHA-256
+checksum. The database opens at `~/.chainproof/chainproof.db`; set
+`CHAINPROOF_DB` to put it somewhere else.
 
 ## Open it
 
@@ -141,7 +163,7 @@ Wrapping records the process lifecycle and exit status as **observed**. It does
 not magically reveal internal tool calls or private model reasoning. A native
 hook, push integration, or pull adapter provides the richer event stream.
 
-## The counter
+## The run cockpit
 
 The TUI is a deterministic run cockpit: repository and objective fingerprint,
 duration, tool/change/failure/policy signals, chain integrity, a full-width
@@ -174,7 +196,10 @@ export. Every summary fact resolves to ledger evidence.
 
 Tokyo Night is the house light. Synthwave '84 repaints the room in violet,
 electric pink, and cyan. The local web dashboard carries both palettes too;
-its switch is remembered in the browser.
+its switch is remembered in the browser. ChainProof explicitly enables
+truecolor for the interactive TUI because terminal launchers often leak
+`TERM=dumb` or `NO_COLOR`; use `CHAINPROOF_COLOR=never` for intentional
+monochrome output.
 
 ## Investigate what happened
 
@@ -201,10 +226,11 @@ The index is deliberately not part of the proof. It can be deleted and rebuilt
 from canonical ledger events without changing a chain head. See
 [`docs/investigation.md`](docs/investigation.md) for the boundary and query API.
 
-## Four ways in
+## Bring any agent
 
 The proof format knows nothing about model vendors. Integrations sit at the
-edge and normalize into one stable event shape.
+edge and normalize into one stable event shape. There are four ways in:
+automatic discovery, push, pull, and process wrapping.
 
 ### Codex — discovered automatically
 
@@ -275,7 +301,7 @@ The adapter contract and integration guidance live in
 
 ## OpenClaw
 
-The first first-party integration ships in
+The OpenClaw integration ships in
 [`integrations/openclaw`](integrations/openclaw). Start the local server, build
 the hook, and install that directory in OpenClaw:
 
@@ -353,7 +379,8 @@ The things ChainProof writes are its own:
 
 - `~/.chainproof/chainproof.db` — ledger, rebuildable search index, cursors, and artifacts
 - `~/.chainproof/chainproof.db-wal` — SQLite's write-ahead log while active
-- an export path only when you ask for one with `chainproof export`
+- `~/.chainproof/exports/` when you press `x` in the TUI
+- another export path only when you ask for one with `chainproof export`
 
 It does not edit the repositories or harness histories it observes.
 
