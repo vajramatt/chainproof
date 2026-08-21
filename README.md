@@ -37,7 +37,7 @@ curl -fsSL https://raw.githubusercontent.com/vajramatt/chainproof/main/scripts/i
 Or, with Go 1.24 or newer:
 
 ```sh
-go install github.com/vajramatt/chainproof/cmd/chainproof@v0.4.0
+go install github.com/vajramatt/chainproof/cmd/chainproof@v0.4.1
 ```
 
 Or build the checkout:
@@ -350,7 +350,7 @@ local SQLite database using WAL mode and serialized writes. Artifact hashes are
 computed over raw bytes—not decoded text—and content-addressed by SHA-256.
 
 The web server binds to `127.0.0.1:7331` by default and rejects non-local host
-headers. v0.4.0 intentionally has no multi-user authentication; do not expose it
+headers. v0.4.1 intentionally has no multi-user authentication; do not expose it
 to a network.
 
 The things ChainProof writes are its own:

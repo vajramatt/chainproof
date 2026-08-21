@@ -134,113 +134,124 @@ func (m model) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 }
 func (m model) View() string {
 	t := themes[m.theme]
-	base := lipgloss.NewStyle().Background(t.BG).Foreground(t.Text)
 	if m.width == 0 {
 		return "Starting ChainProof…"
 	}
+	w, h := max(64, m.width), max(16, m.height)
 	search := ""
 	if m.query != "" || m.searching {
 		cursor := ""
 		if m.searching {
-			cursor = "█"
+			cursor = "▌"
 		}
 		search = "  / " + m.query + cursor
 	}
-	head := lipgloss.NewStyle().Bold(true).Foreground(t.Primary).Background(t.Panel).Width(m.width).Padding(0, 2).Render("⬡ CHAINPROOF  //  " + strings.ToUpper(t.Name) + search)
-	stats := m.statsView(t)
-	leftW := max(30, min(46, m.width/3))
-	left := m.runsView(t, leftW)
-	right := m.detailView(t, max(30, m.width-leftW-1))
-	body := lipgloss.JoinHorizontal(lipgloss.Top, left, right)
-	foot := lipgloss.NewStyle().Foreground(t.Muted).Background(t.Panel).Width(m.width).Padding(0, 2).Render("j/k navigate  ·  / investigate  ·  esc clear  ·  v verify  ·  t theme  ·  q quit")
-	return base.Width(m.width).Height(m.height).Render(head + "\n" + stats + "\n" + body + "\n" + foot)
-}
-func (m model) statsView(t theme) string {
-	active, completed := 0, 0
-	agents := map[string]bool{}
-	for _, r := range m.runs {
-		if r.Status == "active" {
+	active, agents := 0, map[string]bool{}
+	for _, run := range m.runs {
+		if run.Status == "active" {
 			active++
 		}
-		if r.Status == "completed" {
-			completed++
-		}
-		agents[r.Agent] = true
+		agents[run.Agent] = true
 	}
-	pct := "—"
+	integrity := "—"
 	if len(m.runs) > 0 {
-		pct = fmt.Sprintf("%d%%", m.valid*100/len(m.runs))
+		integrity = fmt.Sprintf("%d%%", m.valid*100/len(m.runs))
 	}
-	values := []struct {
-		label, value string
-		color        lipgloss.Color
-	}{{"ACTIVE RUNS", fmt.Sprint(active), t.Warning}, {"COMPLETED", fmt.Sprint(completed), t.Secondary}, {"AGENTS", fmt.Sprint(len(agents)), t.Primary}, {"CHAIN INTEGRITY", pct, t.Success}}
-	w := max(12, (m.width-3)/4)
-	cards := make([]string, 0, 4)
-	for _, v := range values {
-		cards = append(cards, lipgloss.NewStyle().Background(t.Panel).BorderTop(true).BorderForeground(v.color).Width(w).Padding(0, 1).Render(lipgloss.NewStyle().Foreground(t.Muted).Render(v.label)+"\n"+lipgloss.NewStyle().Bold(true).Foreground(v.color).Render(v.value)))
+	headerText := fmt.Sprintf("  ⬡ CHAINPROOF  %s   %d RUNS  %d ACTIVE  %d AGENTS  %s INTEGRITY%s", strings.ToUpper(t.Name), len(m.runs), active, len(agents), integrity, search)
+	head := lipgloss.NewStyle().Bold(true).Foreground(t.Primary).Background(t.Panel).Width(w).Render(trim(headerText, w))
+	rule := lipgloss.NewStyle().Foreground(t.Warning).Background(t.BG).Width(w).Render(strings.Repeat("─", w))
+	bodyH := h - 4
+	leftW := max(25, min(38, w/3))
+	left := m.runsView(t, leftW, bodyH)
+	right := m.detailView(t, w-leftW-1, bodyH)
+	body := lipgloss.JoinHorizontal(lipgloss.Top, left, right)
+	footText := "  j/k browse   / investigate   v verify   t lanterns   q leave"
+	if m.searching {
+		footText = "  type to search evidence   enter keep   esc clear"
+	} else if m.query != "" {
+		footText = fmt.Sprintf("  %d matches   / edit search   esc clear   q leave", m.search.Total)
 	}
-	return lipgloss.JoinHorizontal(lipgloss.Top, cards...)
+	foot := lipgloss.NewStyle().Foreground(t.Muted).Background(t.Panel).Width(w).Render(trim(footText, w))
+	return head + "\n" + rule + "\n" + body + "\n" + rule + "\n" + foot
 }
-func (m model) runsView(t theme, w int) string {
-	title := lipgloss.NewStyle().Bold(true).Foreground(t.Secondary).Render("RUNS")
-	lines := []string{title, ""}
-	for i, r := range m.runs {
+func (m model) runsView(t theme, w, h int) string {
+	lines := []string{lipgloss.NewStyle().Bold(true).Foreground(t.Secondary).Render("  RUNS")}
+	start := 0
+	if m.selected >= h-2 {
+		start = m.selected - h + 3
+	}
+	for i := start; i < len(m.runs) && len(lines) < h; i++ {
+		r := m.runs[i]
 		mark := " "
 		if i == m.selected {
-			mark = "›"
+			mark = "▌"
 		}
 		color := t.Muted
+		state := "·"
 		if r.Status == "active" {
 			color = t.Warning
+			state = "●"
 		} else if r.Status == "completed" {
 			color = t.Success
+			state = "✓"
 		}
-		line := fmt.Sprintf("%s %s", mark, trim(r.Agent, w-4))
-		meta := fmt.Sprintf("  %s · %d · %s", r.Status, r.EntryCount, r.ID[:8])
-		lines = append(lines, lipgloss.NewStyle().Foreground(color).Bold(i == m.selected).Render(line), lipgloss.NewStyle().Foreground(t.Muted).Render(meta), "")
+		nameW := max(8, w-12)
+		line := fmt.Sprintf("%s %s %-*s %4d", mark, state, nameW, trim(r.Agent, nameW), r.EntryCount)
+		style := lipgloss.NewStyle().Foreground(color).Width(w)
+		if i == m.selected {
+			style = style.Bold(true).Background(t.BG)
+		}
+		lines = append(lines, style.Render(trim(line, w)))
 	}
-	return lipgloss.NewStyle().Background(t.Panel).BorderRight(true).BorderForeground(t.Muted).Width(w).Height(max(4, m.height-7)).Padding(1, 2).Render(strings.Join(lines, "\n"))
+	for len(lines) < h {
+		lines = append(lines, "")
+	}
+	return lipgloss.NewStyle().Background(t.Panel).BorderRight(true).BorderForeground(t.Muted).Width(w).Height(h).Render(strings.Join(lines[:h], "\n"))
 }
-func (m model) detailView(t theme, w int) string {
+func (m model) detailView(t theme, w, h int) string {
 	if m.query != "" {
-		lines := []string{lipgloss.NewStyle().Bold(true).Foreground(t.Primary).Render("// INVESTIGATE EVIDENCE"), lipgloss.NewStyle().Foreground(t.Muted).Render(fmt.Sprintf("%d matches for %q", m.search.Total, m.query)), ""}
-		maxHits := max(3, m.height-13)
+		lines := []string{lipgloss.NewStyle().Bold(true).Foreground(t.Primary).Render("  // INVESTIGATE EVIDENCE"), lipgloss.NewStyle().Foreground(t.Muted).Render(fmt.Sprintf("  %d matches for %q", m.search.Total, m.query)), ""}
+		maxHits := max(2, (h-3)/2)
 		for _, hit := range m.search.Hits[:min(len(m.search.Hits), maxHits)] {
 			color := t.Secondary
 			if hit.Status == "failed" {
 				color = t.Danger
 			}
 			lines = append(lines,
-				lipgloss.NewStyle().Foreground(color).Render(fmt.Sprintf("#%04d  %-18s %s", hit.Sequence, trim(hit.Kind, 18), trim(hit.Tool, 12))),
-				lipgloss.NewStyle().Foreground(t.Text).Render("  "+trim(hit.Summary, w-4)),
-				lipgloss.NewStyle().Foreground(t.Muted).Render("  "+trim(hit.Agent+" · "+hit.CollectionMode+" · "+hit.RunID[:8], w-4)), "")
+				lipgloss.NewStyle().Foreground(color).Render(fmt.Sprintf("  #%04d  %-18s %s", hit.Sequence, trim(hit.Kind, 18), trim(hit.Tool, 12))),
+				lipgloss.NewStyle().Foreground(t.Muted).Render("    "+trim(hit.Agent+" · "+hit.Status+" · "+hit.RunID[:8], w-6)))
 		}
 		if len(m.search.Hits) == 0 {
-			lines = append(lines, "No matching provenance evidence.")
+			lines = append(lines, "  No matching provenance evidence.")
 		}
-		return lipgloss.NewStyle().Width(w).Height(max(4, m.height-7)).Padding(1, 2).Render(strings.Join(lines, "\n"))
+		return pane(t, w, h, lines)
 	}
 	if len(m.runs) == 0 {
-		return lipgloss.NewStyle().Width(w).Padding(2).Render("No provenance runs yet.\n\nchainproof start --agent my-agent")
+		return pane(t, w, h, []string{"  No provenance runs yet.", "", "  Codex discovery is automatic."})
 	}
 	r := m.runs[m.selected]
 	valid := lipgloss.NewStyle().Foreground(t.Danger).Render("✗ INVALID " + m.verify.Reason)
 	if m.verify.Valid {
 		valid = lipgloss.NewStyle().Foreground(t.Success).Render("✓ CHAIN VERIFIED")
 	}
-	segments := strings.Repeat("▰", min(36, max(1, len(m.events))))
+	segments := strings.Repeat("▰", min(max(8, w-30), max(1, len(m.events))))
 	if !m.verify.Valid {
 		segments = lipgloss.NewStyle().Foreground(t.Danger).Render(segments)
 	} else {
 		segments = lipgloss.NewStyle().Foreground(t.Success).Render(segments)
 	}
-	lines := []string{lipgloss.NewStyle().Bold(true).Foreground(t.Primary).Render("// LIVE PROVENANCE"), "", r.Agent + "  /  " + r.ID, "HEAD  " + trim(r.ChainHead, w-8), segments, valid, ""}
-	start := max(0, len(m.events)-max(4, m.height-17))
+	lines := []string{lipgloss.NewStyle().Bold(true).Foreground(t.Primary).Render("  // LIVE PROVENANCE"), "", lipgloss.NewStyle().Bold(true).Foreground(t.Text).Render("  " + r.Agent), lipgloss.NewStyle().Foreground(t.Muted).Render("  " + trim(r.Harness+" · "+r.Model+" · "+r.Status, w-4)), "  " + segments + "  " + valid, lipgloss.NewStyle().Foreground(t.Muted).Render("  HEAD " + trim(r.ChainHead, w-9)), "", lipgloss.NewStyle().Foreground(t.Secondary).Render("  EVIDENCE STREAM")}
+	start := max(0, len(m.events)-max(3, h-len(lines)))
 	for _, e := range m.events[start:] {
-		lines = append(lines, fmt.Sprintf("%04d  %-9s  %s", e.Sequence, strings.ToUpper(e.Source.Mode), e.Kind), lipgloss.NewStyle().Foreground(t.Muted).Render("      "+trim(fmt.Sprint(e.Payload), w-8)))
+		lines = append(lines, fmt.Sprintf("  %04d  %-9s  %s", e.Sequence, strings.ToUpper(e.Source.Mode), trim(e.Kind, w-23)))
 	}
-	return lipgloss.NewStyle().Width(w).Height(max(4, m.height-7)).Padding(1, 2).Render(strings.Join(lines, "\n"))
+	return pane(t, w, h, lines)
+}
+func pane(t theme, w, h int, lines []string) string {
+	for len(lines) < h {
+		lines = append(lines, "")
+	}
+	return lipgloss.NewStyle().Background(t.BG).Width(w).Height(h).Render(strings.Join(lines[:h], "\n"))
 }
 func trim(s string, n int) string {
 	if len(s) <= n {

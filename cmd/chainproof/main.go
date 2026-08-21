@@ -26,7 +26,7 @@ import (
 	"github.com/vajramatt/chainproof/internal/tui"
 )
 
-const version = "0.4.0"
+const version = "0.4.1"
 
 func main() {
 	if err := run(os.Args[1:]); err != nil {
