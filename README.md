@@ -7,6 +7,7 @@
 </p>
 
 <p align="center">
+  <a href="https://chainproof.ai">Website</a> ·
   <a href="#install">Install</a> ·
   <a href="#the-run-cockpit">Run cockpit</a> ·
   <a href="#bring-any-agent">Integrations</a> ·
@@ -225,6 +226,11 @@ content is protected by the default hashes-only policy.
 The index is deliberately not part of the proof. It can be deleted and rebuilt
 from canonical ledger events without changing a chain head. See
 [`docs/investigation.md`](docs/investigation.md) for the boundary and query API.
+
+The next-generation local browser experience is specified in
+[`docs/web-explorer.md`](docs/web-explorer.md): a run cockpit for timelines,
+diffs, artifacts, failure analysis, comparison, and proof reports—not a hosted
+SaaS dashboard.
 
 ## Bring any agent
 
