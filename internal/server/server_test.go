@@ -6,12 +6,34 @@ import (
 	"net/http"
 	"net/http/httptest"
 	"path/filepath"
+	"strings"
 	"testing"
 
 	"github.com/vajramatt/chainproof/internal/adapters/codex"
 	"github.com/vajramatt/chainproof/internal/proof"
 	"github.com/vajramatt/chainproof/internal/store"
 )
+
+func TestWebExplorerExplainsVerificationBoundary(t *testing.T) {
+	db, err := store.Open(filepath.Join(t.TempDir(), "test.db"))
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer db.Close()
+	app := New(db, "127.0.0.1:0", NewStatus("test"))
+	request := httptest.NewRequest(http.MethodGet, "http://localhost/", nil)
+	response := httptest.NewRecorder()
+	app.http.Handler.ServeHTTP(response, request)
+	if response.Code != http.StatusOK {
+		t.Fatalf("status code %d", response.Code)
+	}
+	body := response.Body.String()
+	for _, text := range []string{"What verification means", "does not prove that claim was true", "aria-label=\"Filter by provenance source\""} {
+		if !strings.Contains(body, text) {
+			t.Fatalf("web explorer is missing %q", text)
+		}
+	}
+}
 
 func TestStatusEndpointReportsCollectorHealth(t *testing.T) {
 	db, err := store.Open(filepath.Join(t.TempDir(), "test.db"))
