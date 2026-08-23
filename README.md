@@ -185,9 +185,9 @@ export. Every summary fact resolves to ledger evidence.
 
 | key | what |
 | --- | --- |
-| `j` / `k` · arrows | move through runs |
+| `j` / `k` · arrows | move through runs, evidence, search results, or inspected payloads |
 | `Tab` | switch focus between runs and evidence |
-| `Enter` | inspect the selected canonical event |
+| `Enter` | inspect the selected canonical event or search result |
 | `f` / `c` / `d` / `p` / `a` | failures / changes / decisions / policy / all |
 | `/` | search evidence; supports `tool:`, `status:`, `agent:`, `kind:`, `mode:`, `file:` |
 | `x` | export the selected portable proof to `~/.chainproof/exports` |

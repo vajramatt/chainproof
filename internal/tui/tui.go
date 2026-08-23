@@ -30,11 +30,20 @@ type loaded struct {
 	verify proof.Verification
 	valid  int
 	err    error
+	cache  map[string]cachedVerification
 }
 type tick time.Time
 type exported struct {
 	path string
 	err  error
+}
+type eventLoaded struct {
+	event proof.Event
+	err   error
+}
+type cachedVerification struct {
+	chainHead    string
+	verification proof.Verification
 }
 type model struct {
 	store                          *store.Store
@@ -44,14 +53,18 @@ type model struct {
 	search                         store.SearchResult
 	query                          string
 	searching                      bool
+	searchSelected                 int
 	focus                          int
 	eventSelected                  int
 	inspect                        bool
+	inspectEvent                   *proof.Event
+	inspectOffset                  int
 	filter                         string
 	notice                         string
 	selected, theme, width, height int
 	err                            error
 	valid                          int
+	verificationCache              map[string]cachedVerification
 }
 
 func Run(s *store.Store) error {
@@ -171,12 +184,24 @@ func (m model) load() tea.Msg {
 	var events []proof.Event
 	var verification proof.Verification
 	valid := 0
+	cache := make(map[string]cachedVerification, len(runs))
 	if e == nil && len(runs) > 0 {
-		events, e = m.store.Events(context.Background(), runs[min(m.selected, len(runs)-1)].ID)
-		verification = m.store.Verify(context.Background(), runs[min(m.selected, len(runs)-1)].ID)
+		selectedRun := runs[min(m.selected, len(runs)-1)]
+		events, e = m.store.Events(context.Background(), selectedRun.ID)
 		for _, run := range runs {
-			if m.store.Verify(context.Background(), run.ID).Valid {
+			cached, ok := m.verificationCache[run.ID]
+			// Always re-verify the visible run so out-of-band ledger tampering is
+			// detected even when the recorded chain head did not change. Cache the
+			// remaining runs until their chain heads move.
+			if run.ID == selectedRun.ID || !ok || cached.chainHead != run.ChainHead {
+				cached = cachedVerification{chainHead: run.ChainHead, verification: m.store.Verify(context.Background(), run.ID)}
+			}
+			cache[run.ID] = cached
+			if cached.verification.Valid {
 				valid++
+			}
+			if run.ID == selectedRun.ID {
+				verification = cached.verification
 			}
 		}
 	}
@@ -184,7 +209,7 @@ func (m model) load() tea.Msg {
 	if e == nil && m.query != "" {
 		search, e = m.store.Search(context.Background(), parseSearch(m.query))
 	}
-	return loaded{runs, events, search, verification, valid, e}
+	return loaded{runs: runs, events: events, search: search, verify: verification, valid: valid, err: e, cache: cache}
 }
 func (m model) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 	switch v := msg.(type) {
@@ -192,6 +217,7 @@ func (m model) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 		m.width, m.height = v.Width, v.Height
 	case loaded:
 		m.runs, m.events, m.search, m.verify, m.valid, m.err = v.runs, v.events, v.search, v.verify, v.valid, v.err
+		m.verificationCache = v.cache
 		if len(m.runs) == 0 {
 			m.selected = 0
 		} else if m.selected >= len(m.runs) {
@@ -202,6 +228,11 @@ func (m model) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 		} else if m.eventSelected >= len(m.events) || m.eventSelected < 0 {
 			m.eventSelected = len(m.events) - 1
 		}
+		if len(m.search.Hits) == 0 {
+			m.searchSelected = 0
+		} else if m.searchSelected >= len(m.search.Hits) {
+			m.searchSelected = len(m.search.Hits) - 1
+		}
 		return m, tea.Tick(time.Second, func(t time.Time) tea.Msg { return tick(t) })
 	case tick:
 		return m, m.load
@@ -211,6 +242,13 @@ func (m model) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 		} else {
 			m.notice = "proof exported → " + v.path
 		}
+		return m, nil
+	case eventLoaded:
+		if v.err != nil {
+			m.notice = "event load failed: " + v.err.Error()
+			return m, nil
+		}
+		m.inspectEvent, m.inspect, m.inspectOffset = &v.event, true, 0
 		return m, nil
 	case tea.KeyMsg:
 		if m.searching {
@@ -235,11 +273,26 @@ func (m model) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 			}
 			return m, nil
 		}
+		if m.inspect {
+			switch v.String() {
+			case "q", "ctrl+c":
+				return m, tea.Quit
+			case "j", "down", "pgdown":
+				m.inspectOffset = min(m.inspectOffset+1, m.inspectMaxOffset())
+			case "k", "up", "pgup":
+				m.inspectOffset = max(0, m.inspectOffset-1)
+			case "enter", "esc":
+				m.inspect, m.inspectEvent, m.inspectOffset = false, nil, 0
+			}
+			return m, nil
+		}
 		switch v.String() {
 		case "q", "ctrl+c":
 			return m, tea.Quit
 		case "j", "down":
-			if m.focus == 1 {
+			if m.query != "" {
+				m.searchSelected = min(max(0, len(m.search.Hits)-1), m.searchSelected+1)
+			} else if m.focus == 1 {
 				m = m.moveEvidence(1)
 			} else if m.focus == 0 && m.selected < len(m.runs)-1 {
 				m.selected++
@@ -247,7 +300,9 @@ func (m model) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 				return m, m.load
 			}
 		case "k", "up":
-			if m.focus == 1 {
+			if m.query != "" {
+				m.searchSelected = max(0, m.searchSelected-1)
+			} else if m.focus == 1 {
 				m = m.moveEvidence(-1)
 			} else if m.focus == 0 && m.selected > 0 {
 				m.selected--
@@ -257,8 +312,16 @@ func (m model) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 		case "tab", "right", "left":
 			m.focus = (m.focus + 1) % 2
 		case "enter":
-			if m.focus == 1 && len(m.events) > 0 {
-				m.inspect = !m.inspect
+			if m.query != "" && len(m.search.Hits) > 0 {
+				hit := m.search.Hits[m.searchSelected]
+				return m, func() tea.Msg {
+					event, err := m.store.Event(context.Background(), hit.EventID)
+					return eventLoaded{event: event, err: err}
+				}
+			}
+			if m.focus == 1 && len(m.events) > 0 && m.eventSelected >= 0 {
+				event := m.events[m.eventSelected]
+				m.inspectEvent, m.inspect, m.inspectOffset = &event, true, 0
 			}
 		case "t":
 			m.theme = (m.theme + 1) % len(themes)
@@ -277,26 +340,36 @@ func (m model) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 			m.searching = true
 			return m, nil
 		case "esc":
-			if m.inspect {
-				m.inspect = false
-				return m, nil
-			}
 			if m.query != "" {
 				m.query = ""
 				return m, m.load
 			}
 		case "r", "v":
+			m.verificationCache = nil
 			return m, m.load
 		}
 	}
 	return m, nil
 }
+
+func (m model) inspectMaxOffset() int {
+	if m.inspectEvent == nil {
+		return 0
+	}
+	raw, _ := json.MarshalIndent(m.inspectEvent.Payload, "", "  ")
+	contentLines := 13 + strings.Count(string(raw), "\n")
+	return max(0, contentLines-max(1, m.height-4))
+}
+
 func (m model) View() string {
 	t := themes[m.theme]
 	if m.width == 0 {
 		return "Starting ChainProof…"
 	}
-	w, h := max(64, m.width), max(16, m.height)
+	w, h := max(1, m.width), max(1, m.height)
+	if h < 5 {
+		return lipgloss.NewStyle().Foreground(t.Primary).Render(trim("⬡ ChainProof · enlarge terminal", w))
+	}
 	search := ""
 	if m.query != "" || m.searching {
 		cursor := ""
@@ -316,22 +389,40 @@ func (m model) View() string {
 	if len(m.runs) > 0 {
 		integrity = fmt.Sprintf("%d%%", m.valid*100/len(m.runs))
 	}
-	head := chip(" ⬡ CHAINPROOF ", t.BG, t.Primary) + chip(" "+strings.ToUpper(t.Name)+" ", t.BG, t.Secondary) + chip(fmt.Sprintf(" %d RUNS ", len(m.runs)), t.Text, t.Highlight) + chip(fmt.Sprintf(" %d ACTIVE ", active), t.BG, t.Warning) + chip(fmt.Sprintf(" %d AGENTS ", len(agents)), t.BG, t.Primary) + chip(" "+integrity+" INTEGRITY ", t.BG, t.Success)
-	if search != "" {
-		head += lipgloss.NewStyle().Foreground(t.Text).Background(t.Panel).Render(search)
+	var head string
+	if w < 64 {
+		head = fmt.Sprintf("  ⬡ CHAINPROOF · %d runs · %s integrity", len(m.runs), integrity)
+		if search != "" {
+			head += search
+		}
+		head = lipgloss.NewStyle().Bold(true).Foreground(t.Primary).Background(t.Panel).Width(w).Render(trim(head, w))
+	} else {
+		head = chip(" ⬡ CHAINPROOF ", t.BG, t.Primary) + chip(" "+strings.ToUpper(t.Name)+" ", t.BG, t.Secondary) + chip(fmt.Sprintf(" %d RUNS ", len(m.runs)), t.Text, t.Highlight) + chip(fmt.Sprintf(" %d ACTIVE ", active), t.BG, t.Warning) + chip(fmt.Sprintf(" %d AGENTS ", len(agents)), t.BG, t.Primary) + chip(" "+integrity+" INTEGRITY ", t.BG, t.Success)
+		if search != "" {
+			head += lipgloss.NewStyle().Foreground(t.Text).Background(t.Panel).Render(search)
+		}
+		head = lipgloss.NewStyle().Background(t.Panel).Width(w).Render(head)
 	}
-	head = lipgloss.NewStyle().Background(t.Panel).Width(w).Render(head)
 	rule := lipgloss.NewStyle().Foreground(t.Warning).Background(t.BG).Width(w).Render(strings.Repeat("─", w))
 	bodyH := h - 4
-	leftW := max(25, min(38, w/3))
-	left := m.runsView(t, leftW, bodyH)
-	right := m.detailView(t, w-leftW-1, bodyH)
-	body := lipgloss.JoinHorizontal(lipgloss.Top, left, right)
+	var body string
+	if w < 64 {
+		if m.focus == 0 && m.query == "" {
+			body = m.runsView(t, max(1, w-1), bodyH)
+		} else {
+			body = m.detailView(t, w, bodyH)
+		}
+	} else {
+		leftW := max(25, min(38, w/3))
+		left := m.runsView(t, leftW, bodyH)
+		right := m.detailView(t, w-leftW-1, bodyH)
+		body = lipgloss.JoinHorizontal(lipgloss.Top, left, right)
+	}
 	footText := "  j/k move  tab pane  ↵ inspect  f failures  c changes  d decisions  p policy  a all  / search  x export  t theme  q leave"
 	if m.searching {
 		footText = "  type to search evidence   enter keep   esc clear"
 	} else if m.query != "" {
-		footText = fmt.Sprintf("  %d matches   / edit search   esc clear   q leave", m.search.Total)
+		footText = fmt.Sprintf("  %d matches   j/k move   ↵ inspect   / edit   esc clear", m.search.Total)
 	} else if m.notice != "" {
 		footText = "  " + m.notice
 	}
@@ -379,17 +470,27 @@ func (m model) runsView(t theme, w, h int) string {
 	return lipgloss.NewStyle().Background(t.Panel).BorderRight(true).BorderForeground(t.Muted).Width(w).Height(h).Render(strings.Join(lines[:h], "\n"))
 }
 func (m model) detailView(t theme, w, h int) string {
+	if m.inspect && m.inspectEvent != nil {
+		return inspectEvent(t, w, h, *m.inspectEvent, m.inspectOffset)
+	}
 	if m.query != "" {
 		lines := []string{lipgloss.NewStyle().Bold(true).Foreground(t.Primary).Render("  // INVESTIGATE EVIDENCE"), lipgloss.NewStyle().Foreground(t.Muted).Render(fmt.Sprintf("  %d matches for %q", m.search.Total, m.query)), ""}
-		maxHits := max(2, (h-3)/2)
-		for _, hit := range m.search.Hits[:min(len(m.search.Hits), maxHits)] {
+		maxHits := max(1, (h-3)/2)
+		start := max(0, m.searchSelected-maxHits+1)
+		end := min(len(m.search.Hits), start+maxHits)
+		for i := start; i < end; i++ {
+			hit := m.search.Hits[i]
 			color := t.Secondary
 			if hit.Status == "failed" {
 				color = t.Danger
 			}
+			style := lipgloss.NewStyle().Foreground(color).Width(w)
+			if i == m.searchSelected {
+				style = style.Bold(true).Foreground(t.BG).Background(t.Secondary)
+			}
 			lines = append(lines,
-				lipgloss.NewStyle().Foreground(color).Render(fmt.Sprintf("  #%04d  %-18s %s", hit.Sequence, trim(hit.Kind, 18), trim(hit.Tool, 12))),
-				lipgloss.NewStyle().Foreground(t.Muted).Render("    "+trim(hit.Agent+" · "+hit.Status+" · "+hit.RunID[:8], w-6)))
+				style.Render(trim(fmt.Sprintf("  #%04d  %-18s %s", hit.Sequence, trim(hit.Kind, 18), trim(hit.Tool, 12)), w)),
+				lipgloss.NewStyle().Foreground(t.Muted).Render("    "+trim(hit.Agent+" · "+hit.Status+" · "+shortID(hit.RunID), max(1, w-6))))
 		}
 		if len(m.search.Hits) == 0 {
 			lines = append(lines, "  No matching provenance evidence.")
@@ -400,9 +501,6 @@ func (m model) detailView(t theme, w, h int) string {
 		return pane(t, w, h, []string{"  No provenance runs yet.", "", "  Codex discovery is automatic."})
 	}
 	r := m.runs[m.selected]
-	if m.inspect && m.eventSelected >= 0 && m.eventSelected < len(m.events) {
-		return inspectEvent(t, w, h, m.events[m.eventSelected])
-	}
 	valid := lipgloss.NewStyle().Foreground(t.Danger).Render("✗ INVALID " + m.verify.Reason)
 	if m.verify.Valid {
 		valid = lipgloss.NewStyle().Foreground(t.Success).Render("✓ CHAIN VERIFIED")
@@ -451,7 +549,7 @@ func (m model) detailView(t theme, w, h int) string {
 	if len(m.events) > 1 {
 		duration = m.events[len(m.events)-1].Timestamp.Sub(m.events[0].Timestamp).Round(time.Second).String()
 	}
-	identity := "  " + chip(" "+strings.ToUpper(r.Status)+" ", t.BG, statusColor(t, r.Status)) + "  " + lipgloss.NewStyle().Bold(true).Foreground(t.Text).Render(r.Agent) + lipgloss.NewStyle().Foreground(t.Muted).Render("  "+r.Harness+" / "+r.Model+"  ·  run "+r.ID[:8])
+	identity := "  " + chip(" "+strings.ToUpper(r.Status)+" ", t.BG, statusColor(t, r.Status)) + "  " + lipgloss.NewStyle().Bold(true).Foreground(t.Text).Render(r.Agent) + lipgloss.NewStyle().Foreground(t.Muted).Render("  "+r.Harness+" / "+r.Model+"  ·  run "+shortID(r.ID))
 	metrics := fmt.Sprintf("  %d EVENTS   %d TOOLS   %d CHANGES   %d FAILURES   %d POLICY   %d IN / %d OUT   %s", len(m.events), toolCount, changes, failures, policySignals, humanCount, outputCount, duration)
 	lines := []string{
 		lipgloss.NewStyle().Bold(true).Foreground(t.Primary).Render("  // LIVE PROVENANCE"),
@@ -599,7 +697,7 @@ func eventColor(t theme, kind string) lipgloss.Color {
 		return t.Muted
 	}
 }
-func inspectEvent(t theme, w, h int, event proof.Event) string {
+func inspectEvent(t theme, w, h int, event proof.Event, offset int) string {
 	lines := []string{
 		chip(" EVENT ", t.BG, t.Secondary) + " " + lipgloss.NewStyle().Bold(true).Foreground(t.Text).Render(event.Kind),
 		lipgloss.NewStyle().Foreground(t.Muted).Render(fmt.Sprintf("  #%04d · %s · %s", event.Sequence, strings.ToUpper(event.Source.Mode), event.Timestamp.Format("15:04:05"))),
@@ -614,13 +712,12 @@ func inspectEvent(t theme, w, h int, event proof.Event) string {
 	}
 	raw, _ := json.MarshalIndent(event.Payload, "", "  ")
 	for _, line := range strings.Split(string(raw), "\n") {
-		lines = append(lines, lipgloss.NewStyle().Foreground(t.Muted).Render("  "+trim(line, w-4)))
-		if len(lines) >= h-1 {
-			break
-		}
+		lines = append(lines, lipgloss.NewStyle().Foreground(t.Muted).Render("  "+trim(line, max(1, w-4))))
 	}
-	lines = append(lines, lipgloss.NewStyle().Foreground(t.Secondary).Render("  ↵ or esc to return"))
-	return pane(t, w, h, lines)
+	lines = append(lines, "", lipgloss.NewStyle().Foreground(t.Secondary).Render("  j/k scroll · ↵ or esc return"))
+	maxOffset := max(0, len(lines)-h)
+	offset = min(max(0, offset), maxOffset)
+	return pane(t, w, h, lines[offset:min(len(lines), offset+h)])
 }
 func pane(t theme, w, h int, lines []string) string {
 	for len(lines) < h {
@@ -646,8 +743,15 @@ func backgroundANSI(color lipgloss.Color) string {
 	return fmt.Sprintf("\x1b[48;2;%d;%d;%dm", red, green, blue)
 }
 func trim(s string, n int) string {
+	if n <= 0 {
+		return ""
+	}
 	if len(s) <= n {
 		return s
 	}
 	return s[:max(0, n-1)] + "…"
+}
+
+func shortID(id string) string {
+	return id[:min(8, len(id))]
 }

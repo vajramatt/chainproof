@@ -1,11 +1,14 @@
 package tui
 
 import (
+	"strings"
 	"testing"
 	"time"
 
 	tea "github.com/charmbracelet/bubbletea"
+	"github.com/charmbracelet/lipgloss"
 	"github.com/vajramatt/chainproof/internal/proof"
+	"github.com/vajramatt/chainproof/internal/store"
 )
 
 func TestDownArrowCanRenderWhileNextRunLoads(t *testing.T) {
@@ -27,6 +30,50 @@ func TestDownArrowCanRenderWhileNextRunLoads(t *testing.T) {
 	// Rendering before the async load completes must use the old evidence
 	// safely instead of indexing it with the transitional -1 cursor.
 	_ = next.View()
+}
+
+func TestSearchResultsCanBeSelected(t *testing.T) {
+	m := model{
+		query: "failed",
+		search: store.SearchResult{Hits: []store.SearchHit{
+			{EventID: "first", RunID: "run-one"},
+			{EventID: "second", RunID: "run-two"},
+		}},
+	}
+	updated, _ := m.Update(tea.KeyMsg{Type: tea.KeyDown})
+	next := updated.(model)
+	if next.searchSelected != 1 {
+		t.Fatalf("selected search result = %d, want 1", next.searchSelected)
+	}
+}
+
+func TestEventInspectionScrollsAndReturns(t *testing.T) {
+	payload := map[string]any{}
+	for i := 0; i < 30; i++ {
+		payload[string(rune('a'+i))] = i
+	}
+	event := proof.Event{Payload: payload}
+	m := model{inspect: true, inspectEvent: &event, height: 12}
+	updated, _ := m.Update(tea.KeyMsg{Type: tea.KeyDown})
+	next := updated.(model)
+	if next.inspectOffset != 1 {
+		t.Fatalf("inspection offset = %d, want 1", next.inspectOffset)
+	}
+	updated, _ = next.Update(tea.KeyMsg{Type: tea.KeyEsc})
+	next = updated.(model)
+	if next.inspect || next.inspectEvent != nil || next.inspectOffset != 0 {
+		t.Fatal("inspection did not close cleanly")
+	}
+}
+
+func TestNarrowTerminalUsesActualViewport(t *testing.T) {
+	m := model{width: 42, height: 12, eventSelected: -1}
+	view := m.View()
+	for _, line := range strings.Split(view, "\n") {
+		if lipgloss.Width(line) > 42 {
+			t.Fatalf("rendered line is %d columns wide: %q", lipgloss.Width(line), line)
+		}
+	}
 }
 
 func TestStructuredSearchSyntax(t *testing.T) {
