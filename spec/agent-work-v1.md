@@ -34,6 +34,10 @@ the `MissionContext` schema documented in
 [continuity-v1.md](continuity-v1.md). Harness integrations should read it before
 beginning work.
 
+Inside a wrapped process, `chainproof context` uses
+`CHAINPROOF_MISSION_ID` when `--mission` is omitted. Explicit flags still take
+precedence.
+
 Context is data, not an automatically injected prompt. This prevents a generic
 wrapper from guessing harness syntax, preserves exact JSON proof boundaries,
 and lets each integration decide how to place context in its model input.
@@ -47,12 +51,15 @@ accepted mission state until it reconciles them and writes another checkpoint.
 
 ## Checkpoint rule
 
-Before ending useful work, an agent should submit a checkpoint using the IDs
-from its environment:
+Before ending useful work, an agent should submit a checkpoint against its
+environment-bound mission and run:
 
 ```sh
-chainproof checkpoint "$CHAINPROOF_MISSION_ID" "$CHAINPROOF_RUN_ID" CHECKPOINT_JSON
+chainproof checkpoint --current CHECKPOINT_JSON
 ```
+
+`--current` reads `CHAINPROOF_MISSION_ID` and `CHAINPROOF_RUN_ID`. Explicit
+mission and run arguments remain available for recovery or external tooling.
 
 Checkpoint JSON should include summary, complete commitment snapshot, next
 actions, blockers, and evidence references from the current anchored run
