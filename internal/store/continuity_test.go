@@ -280,3 +280,99 @@ func TestMissionsListsMostRecentAndFiltersStatus(t *testing.T) {
 		t.Fatalf("invalid status accepted: %v", err)
 	}
 }
+
+func TestBuildMissionContextSurfacesUncheckpointedWorkWithoutPromotingIt(t *testing.T) {
+	s, err := Open(t.TempDir() + "/test.db")
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer s.Close()
+	ctx := context.Background()
+	mission, _ := s.StartMission(ctx, continuity.MissionInput{Agent: "builder", Objective: "Recover after interruption"})
+	run, _ := s.Start(ctx, "builder", "codex", "gpt-test", map[string]any{"mission_id": mission.ID})
+	anchored, _ := s.Append(ctx, run.ID, proof.EventInput{Kind: "decision", Source: proof.Source{Adapter: "test", Mode: "reported"}, Payload: map[string]any{"choice": "safe"}})
+	s.CreateCheckpoint(ctx, mission.ID, run.ID, continuity.CheckpointInput{Summary: "Known safe state", Evidence: []continuity.EvidenceRef{{EventID: anchored.ID}}})
+	uncheckpointed, _ := s.Append(ctx, run.ID, proof.EventInput{Kind: "tool.result", Source: proof.Source{Adapter: "test", Mode: "observed"}, Payload: map[string]any{"status": "unfinished"}})
+
+	compiled, err := s.BuildMissionContext(ctx, mission.ID, 20)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if len(compiled.UncheckpointedWork) != 1 {
+		t.Fatalf("uncheckpointed tail not surfaced: %+v", compiled.UncheckpointedWork)
+	}
+	if !compiled.HasUncheckpointedWork {
+		t.Fatal("uncheckpointed work gate remained false")
+	}
+	tail := compiled.UncheckpointedWork[0]
+	if tail.RunID != run.ID || tail.AnchoredEntryCount != 1 || tail.CurrentEntryCount != 2 || tail.EventCount != 1 || !tail.Verification.Valid {
+		t.Fatalf("wrong uncheckpointed boundary: %+v", tail)
+	}
+	if len(compiled.Evidence) != 1 || compiled.Evidence[0].ID != anchored.ID || compiled.Evidence[0].ID == uncheckpointed.ID {
+		t.Fatalf("uncheckpointed event was promoted into trusted context: %+v", compiled.Evidence)
+	}
+}
+
+func TestBuildMissionContextFindsWorkBeforeFirstCheckpoint(t *testing.T) {
+	s, err := Open(t.TempDir() + "/test.db")
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer s.Close()
+	ctx := context.Background()
+	mission, _ := s.StartMission(ctx, continuity.MissionInput{Agent: "builder", Objective: "Recover initial work"})
+	run, _ := s.Start(ctx, "builder", "codex", "gpt-test", map[string]any{"mission_id": mission.ID})
+	s.Append(ctx, run.ID, proof.EventInput{Kind: "tool.result", Source: proof.Source{Adapter: "test", Mode: "observed"}})
+
+	compiled, err := s.BuildMissionContext(ctx, mission.ID, 20)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if compiled.Checkpoint != nil || len(compiled.Evidence) != 0 {
+		t.Fatalf("uncheckpointed initial work became trusted context: %+v", compiled)
+	}
+	if len(compiled.UncheckpointedWork) != 1 || compiled.UncheckpointedWork[0].AnchoredEntryCount != 0 || compiled.UncheckpointedWork[0].AnchoredChainHead != continuity.GenesisHash || compiled.UncheckpointedWork[0].EventCount != 1 {
+		t.Fatalf("initial work not recoverable: %+v", compiled.UncheckpointedWork)
+	}
+}
+
+func TestBuildMissionContextValidatesEvidenceBeyondOutputLimit(t *testing.T) {
+	s, err := Open(t.TempDir() + "/test.db")
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer s.Close()
+	ctx := context.Background()
+	mission, _ := s.StartMission(ctx, continuity.MissionInput{Agent: "builder", Objective: "Validate every citation"})
+	run, _ := s.Start(ctx, "builder", "codex", "gpt-test", nil)
+	first, _ := s.Append(ctx, run.ID, proof.EventInput{Kind: "decision", Source: proof.Source{Adapter: "test", Mode: "reported"}})
+	second, _ := s.Append(ctx, run.ID, proof.EventInput{Kind: "tool.result", Source: proof.Source{Adapter: "test", Mode: "observed"}})
+	otherRun, _ := s.Start(ctx, "builder", "codex", "gpt-test", nil)
+	foreign, _ := s.Append(ctx, otherRun.ID, proof.EventInput{Kind: "tool.result", Source: proof.Source{Adapter: "test", Mode: "observed"}})
+	checkpoint, err := s.CreateCheckpoint(ctx, mission.ID, run.ID, continuity.CheckpointInput{
+		Summary: "Two citations", Evidence: []continuity.EvidenceRef{{EventID: first.ID}, {EventID: second.ID}},
+	})
+	if err != nil {
+		t.Fatal(err)
+	}
+	checkpoint.Evidence[1].EventID = foreign.ID
+	checkpoint.CheckpointHash = ""
+	hash, err := continuity.Hash(checkpoint)
+	if err != nil {
+		t.Fatal(err)
+	}
+	raw, err := proof.CanonicalJSON(checkpoint)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if _, err = s.db.ExecContext(ctx, `UPDATE checkpoints SET checkpoint_json=?,checkpoint_hash=? WHERE checkpoint_id=?`, string(raw), hash, checkpoint.ID); err != nil {
+		t.Fatal(err)
+	}
+	if _, err = s.db.ExecContext(ctx, `UPDATE missions SET chain_head=? WHERE mission_id=?`, hash, mission.ID); err != nil {
+		t.Fatal(err)
+	}
+
+	if _, err = s.BuildMissionContext(ctx, mission.ID, 1); err == nil || !strings.Contains(err.Error(), "outside anchored run prefix") {
+		t.Fatalf("invalid capped citation escaped validation: %v", err)
+	}
+}

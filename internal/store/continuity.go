@@ -258,14 +258,20 @@ func (s *Store) BuildMissionContext(ctx context.Context, missionID string, maxEv
 		return continuity.MissionContext{}, fmt.Errorf("continuity verification failed: %s", resume.Verification.Reason)
 	}
 	compiled := continuity.MissionContext{
-		SchemaVersion: "1",
-		Source:        proof.Source{Adapter: "context-compiler", Mode: "derived"},
-		Mission:       resume.Mission,
-		Checkpoint:    resume.Checkpoint,
-		Verification:  resume.Verification,
-		Evidence:      []proof.Event{},
-		Extensions:    map[string]any{},
+		SchemaVersion:      "1",
+		Source:             proof.Source{Adapter: "context-compiler", Mode: "derived"},
+		Mission:            resume.Mission,
+		Checkpoint:         resume.Checkpoint,
+		Verification:       resume.Verification,
+		Evidence:           []proof.Event{},
+		UncheckpointedWork: []continuity.UncheckpointedWork{},
+		Extensions:         map[string]any{},
 	}
+	compiled.UncheckpointedWork, err = s.uncheckpointedMissionWork(ctx, missionID)
+	if err != nil {
+		return continuity.MissionContext{}, err
+	}
+	compiled.HasUncheckpointedWork = len(compiled.UncheckpointedWork) > 0
 	if resume.Checkpoint == nil {
 		return compiled, nil
 	}
@@ -279,17 +285,69 @@ func (s *Store) BuildMissionContext(ctx context.Context, missionID string, maxEv
 			continue
 		}
 		seen[ref.EventID] = struct{}{}
-		if len(compiled.Evidence) == maxEvidence {
-			compiled.EvidenceTruncated = true
-			continue
-		}
 		event, eventErr := s.Event(ctx, ref.EventID)
 		if eventErr != nil || event.RunID != resume.Checkpoint.Run.RunID || event.Sequence >= resume.Checkpoint.Run.EntryCount {
 			return continuity.MissionContext{}, fmt.Errorf("checkpoint evidence %q is outside anchored run prefix", ref.EventID)
 		}
+		if len(compiled.Evidence) == maxEvidence {
+			compiled.EvidenceTruncated = true
+			continue
+		}
 		compiled.Evidence = append(compiled.Evidence, event)
 	}
 	return compiled, nil
+}
+
+func (s *Store) uncheckpointedMissionWork(ctx context.Context, missionID string) ([]continuity.UncheckpointedWork, error) {
+	checkpoints, err := s.Checkpoints(ctx, missionID)
+	if err != nil {
+		return nil, err
+	}
+	anchoredCounts := make(map[string]int)
+	anchoredHeads := make(map[string]string)
+	for _, checkpoint := range checkpoints {
+		if checkpoint.Run.EntryCount > anchoredCounts[checkpoint.Run.RunID] {
+			anchoredCounts[checkpoint.Run.RunID] = checkpoint.Run.EntryCount
+			anchoredHeads[checkpoint.Run.RunID] = checkpoint.Run.ChainHead
+		}
+	}
+	rows, err := s.db.QueryContext(ctx, `SELECT run_id,agent,harness,model,status,started_at,completed_at,entry_count,chain_head,metadata FROM runs WHERE run_id IN (SELECT run_id FROM mission_runs WHERE mission_id=?) OR json_extract(metadata,'$.mission_id')=? ORDER BY started_at DESC`, missionID, missionID)
+	if err != nil {
+		return nil, err
+	}
+	runs := []proof.Run{}
+	for rows.Next() {
+		run, scanErr := scanRun(rows)
+		if scanErr != nil {
+			rows.Close()
+			return nil, scanErr
+		}
+		runs = append(runs, run)
+	}
+	if err = rows.Err(); err != nil {
+		rows.Close()
+		return nil, err
+	}
+	if err = rows.Close(); err != nil {
+		return nil, err
+	}
+	result := []continuity.UncheckpointedWork{}
+	for _, run := range runs {
+		anchored := anchoredCounts[run.ID]
+		anchoredHead := anchoredHeads[run.ID]
+		if anchoredHead == "" {
+			anchoredHead = continuity.GenesisHash
+		}
+		if run.EntryCount <= anchored {
+			continue
+		}
+		result = append(result, continuity.UncheckpointedWork{
+			RunID: run.ID, Status: run.Status, AnchoredEntryCount: anchored, AnchoredChainHead: anchoredHead,
+			CurrentEntryCount: run.EntryCount, EventCount: run.EntryCount - anchored,
+			CurrentChainHead: run.ChainHead, Verification: s.Verify(ctx, run.ID),
+		})
+	}
+	return result, nil
 }
 
 func (s *Store) CompleteMission(ctx context.Context, missionID string) (continuity.Mission, error) {

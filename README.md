@@ -198,7 +198,9 @@ an agent can reject broken inherited context instead of silently trusting it.
 Agents using the localhost API can pass `mission_id` when creating a run, then
 write checkpoints through `/api/missions/{mission_id}/checkpoints`. `context`
 produces bounded derived model input only after verifying mission continuity
-and its cited run evidence.
+and its cited run evidence. It also flags verified run entries newer than the
+latest checkpoint as uncheckpointed recovery work without silently injecting
+their payloads into inherited context.
 
 Export the mission and every anchored run prefix as one portable session proof:
 

@@ -105,7 +105,16 @@ The compiler verifies the mission and anchored run proof first, then emits the
 latest checkpoint plus ordered, deduplicated canonical events cited by its
 general and commitment evidence. Output is marked `source.mode: derived` and
 `evidence_truncated: true` when the requested bound omits cited events. It
-refuses to produce context from invalid continuity.
+refuses to produce context from invalid continuity. Every cited reference is
+validated even when the output limit omits that event.
+
+Interrupted runs can contain evidence newer than the latest checkpoint. Context
+output marks this with `has_uncheckpointed_work` and lists each affected run in
+`uncheckpointed_work`, including anchored and current entry counts, both chain
+boundaries, and current run verification. These entries are recovery metadata;
+their event payloads are not promoted into trusted context. Inspect and
+reconcile the tail, then write a new checkpoint before treating it as resumable
+mission state.
 
 ## Export session proof
 

@@ -98,14 +98,27 @@ type Resume struct {
 }
 
 type MissionContext struct {
-	SchemaVersion     string         `json:"schema_version"`
-	Source            proof.Source   `json:"source"`
-	Mission           Mission        `json:"mission"`
-	Checkpoint        *Checkpoint    `json:"checkpoint,omitempty"`
-	Verification      Verification   `json:"verification"`
-	Evidence          []proof.Event  `json:"evidence"`
-	EvidenceTruncated bool           `json:"evidence_truncated"`
-	Extensions        map[string]any `json:"extensions"`
+	SchemaVersion         string               `json:"schema_version"`
+	Source                proof.Source         `json:"source"`
+	Mission               Mission              `json:"mission"`
+	Checkpoint            *Checkpoint          `json:"checkpoint,omitempty"`
+	Verification          Verification         `json:"verification"`
+	Evidence              []proof.Event        `json:"evidence"`
+	EvidenceTruncated     bool                 `json:"evidence_truncated"`
+	HasUncheckpointedWork bool                 `json:"has_uncheckpointed_work"`
+	UncheckpointedWork    []UncheckpointedWork `json:"uncheckpointed_work"`
+	Extensions            map[string]any       `json:"extensions"`
+}
+
+type UncheckpointedWork struct {
+	RunID              string             `json:"run_id"`
+	Status             string             `json:"status"`
+	AnchoredEntryCount int                `json:"anchored_entry_count"`
+	AnchoredChainHead  string             `json:"anchored_chain_head"`
+	CurrentEntryCount  int                `json:"current_entry_count"`
+	EventCount         int                `json:"event_count"`
+	CurrentChainHead   string             `json:"current_chain_head"`
+	Verification       proof.Verification `json:"verification"`
 }
 
 type Bundle struct {

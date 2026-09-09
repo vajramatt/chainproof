@@ -86,6 +86,16 @@ to match its checkpoint's run ID, entry count, and chain head exactly.
 checkpoint, continuity verification result, and a bounded list of canonical
 events cited by that checkpoint. Evidence is ordered by first citation,
 deduplicated by event ID, and annotated with `evidence_truncated` when capped.
+All citations are resolved and checked against the anchored prefix even when an
+output limit excludes them.
+
+The envelope also carries `has_uncheckpointed_work` and an
+`uncheckpointed_work` array. Each entry identifies a mission-associated run,
+its latest checkpointed entry count and chain head, current entry count and
+chain head, uncheckpointed event count, status, and full-run verification.
+These entries expose interrupted work for recovery but do not add their events
+to the trusted `evidence` array.
+
 The envelope is a rebuildable view, not canonical proof material, and must not
 be emitted when mission or run-anchor verification fails.
 
