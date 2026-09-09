@@ -284,10 +284,19 @@ func run(args []string) error {
 		return output(v, e)
 	case "checkpoint":
 		if len(args) < 3 {
-			return errors.New("usage: chainproof checkpoint MISSION_ID RUN_ID [JSON]")
+			return errors.New("usage: chainproof checkpoint MISSION_ID RUN_ID [JSON] | checkpoint --current [JSON]")
+		}
+		missionID, runID, inputStart := args[1], args[2], 3
+		if args[1] == "--current" {
+			missionID = strings.TrimSpace(os.Getenv("CHAINPROOF_MISSION_ID"))
+			runID = strings.TrimSpace(os.Getenv("CHAINPROOF_RUN_ID"))
+			inputStart = 2
+			if missionID == "" || runID == "" {
+				return errors.New("checkpoint --current requires CHAINPROOF_MISSION_ID and CHAINPROOF_RUN_ID")
+			}
 		}
 		var input continuity.CheckpointInput
-		raw := strings.Join(args[3:], " ")
+		raw := strings.Join(args[inputStart:], " ")
 		if raw == "" {
 			body, _ := io.ReadAll(os.Stdin)
 			raw = string(body)
@@ -295,7 +304,7 @@ func run(args []string) error {
 		if e = json.Unmarshal([]byte(raw), &input); e != nil {
 			return e
 		}
-		checkpoint, checkpointErr := db.CreateCheckpoint(ctx, args[1], args[2], input)
+		checkpoint, checkpointErr := db.CreateCheckpoint(ctx, missionID, runID, input)
 		return output(checkpoint, checkpointErr)
 	case "resume":
 		missionID := ""
@@ -316,6 +325,9 @@ func run(args []string) error {
 		maxEvidence := fs.Int("max-evidence", 20, "")
 		if e = fs.Parse(args[1:]); e != nil {
 			return e
+		}
+		if *missionID == "" {
+			*missionID = strings.TrimSpace(os.Getenv("CHAINPROOF_MISSION_ID"))
 		}
 		if *missionID == "" {
 			mission, missionErr := db.ActiveMission(ctx)
@@ -580,6 +592,7 @@ Usage:
   chainproof search QUERY                    Search local provenance evidence
   chainproof checkpoint MISSION_ID RUN_ID [JSON]
                                               Anchor resumable state to run proof
+  chainproof checkpoint --current [JSON]      Checkpoint wrapped agent run
   chainproof resume [MISSION_ID]             Verify and load latest checkpoint
   chainproof context [--mission ID] [--max-evidence N]
                                               Compile bounded verified agent context

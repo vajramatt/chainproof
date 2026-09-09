@@ -131,6 +131,59 @@ func TestContextCLICompilesVerifiedMissionState(t *testing.T) {
 	}
 }
 
+func TestContextCLIUsesWrappedMissionEnvironment(t *testing.T) {
+	t.Setenv("CHAINPROOF_DB", filepath.Join(t.TempDir(), "chainproof.db"))
+	t.Setenv("CHAINPROOF_CODEX_DISABLED", "1")
+	targetJSON := captureStdout(t, func() error {
+		return run([]string{"mission", "start", "--agent", "builder", "--objective", "Wrapped target"})
+	})
+	var target continuity.Mission
+	if err := json.Unmarshal([]byte(targetJSON), &target); err != nil {
+		t.Fatal(err)
+	}
+	captureStdout(t, func() error {
+		return run([]string{"mission", "start", "--agent", "builder", "--objective", "More recent mission"})
+	})
+	t.Setenv("CHAINPROOF_MISSION_ID", target.ID)
+	contextJSON := captureStdout(t, func() error { return run([]string{"context"}) })
+	var compiled continuity.MissionContext
+	if err := json.Unmarshal([]byte(contextJSON), &compiled); err != nil {
+		t.Fatal(err)
+	}
+	if compiled.Mission.ID != target.ID {
+		t.Fatalf("context ignored wrapped mission environment: %+v", compiled.Mission)
+	}
+}
+
+func TestCheckpointCurrentUsesWrappedAgentEnvironment(t *testing.T) {
+	t.Setenv("CHAINPROOF_DB", filepath.Join(t.TempDir(), "chainproof.db"))
+	t.Setenv("CHAINPROOF_CODEX_DISABLED", "1")
+	missionJSON := captureStdout(t, func() error {
+		return run([]string{"mission", "start", "--agent", "builder", "--objective", "Checkpoint current work"})
+	})
+	var mission continuity.Mission
+	if err := json.Unmarshal([]byte(missionJSON), &mission); err != nil {
+		t.Fatal(err)
+	}
+	runJSON := captureStdout(t, func() error { return run([]string{"start", "--mission", mission.ID}) })
+	var agentRun proof.Run
+	if err := json.Unmarshal([]byte(runJSON), &agentRun); err != nil {
+		t.Fatal(err)
+	}
+	t.Setenv("CHAINPROOF_MISSION_ID", mission.ID)
+	t.Setenv("CHAINPROOF_RUN_ID", agentRun.ID)
+	checkpointJSON := captureStdout(t, func() error {
+		return run([]string{"checkpoint", "--current", `{"summary":"Current agent state saved"}`})
+	})
+	var checkpoint continuity.Checkpoint
+	if err := json.Unmarshal([]byte(checkpointJSON), &checkpoint); err != nil {
+		t.Fatal(err)
+	}
+	if checkpoint.MissionID != mission.ID || checkpoint.Run.RunID != agentRun.ID || checkpoint.Summary != "Current agent state saved" {
+		t.Fatalf("checkpoint ignored wrapped agent environment: %+v", checkpoint)
+	}
+}
+
 func TestMissionListCLIShowsDiscoverableWork(t *testing.T) {
 	t.Setenv("CHAINPROOF_DB", filepath.Join(t.TempDir(), "chainproof.db"))
 	t.Setenv("CHAINPROOF_CODEX_DISABLED", "1")
