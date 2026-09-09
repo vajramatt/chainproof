@@ -36,6 +36,24 @@ func TestWebExplorerExplainsVerificationBoundary(t *testing.T) {
 	}
 }
 
+func TestWebExplorerIncludesMissionContinuityWorkspace(t *testing.T) {
+	db, err := store.Open(filepath.Join(t.TempDir(), "test.db"))
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer db.Close()
+	app := New(db, "127.0.0.1:0", NewStatus("test"))
+	request := httptest.NewRequest(http.MethodGet, "http://localhost/", nil)
+	response := httptest.NewRecorder()
+	app.http.Handler.ServeHTTP(response, request)
+	body := response.Body.String()
+	for _, text := range []string{`data-view="missions"`, `id="missionList"`, `id="missionDetail"`, "Commitment state is reported"} {
+		if !strings.Contains(body, text) {
+			t.Fatalf("mission workspace is missing %q", text)
+		}
+	}
+}
+
 func TestStatusEndpointReportsCollectorHealth(t *testing.T) {
 	db, err := store.Open(filepath.Join(t.TempDir(), "test.db"))
 	if err != nil {
