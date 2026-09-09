@@ -192,6 +192,11 @@ chainproof resume MISSION_ID
 chainproof context --mission MISSION_ID --max-evidence 20
 ```
 
+Mission-wrapped commands receive an ephemeral verified context file plus
+mission and run IDs through environment variables. This gives every harness one
+stable bootstrap contract while leaving prompt injection and checkpoint writing
+to its integration. See [`spec/agent-work-v1.md`](spec/agent-work-v1.md).
+
 `chainproof resume` without an ID loads the most recently updated active
 mission. It returns the latest checkpoint together with verification state, so
 an agent can reject broken inherited context instead of silently trusting it.

@@ -37,6 +37,14 @@ Or wrap an agent process:
 chainproof run --mission MISSION_ID -- codex
 ```
 
+Wrapped processes receive `CHAINPROOF_MISSION_ID`, `CHAINPROOF_RUN_ID`, and
+`CHAINPROOF_CONTEXT_FILE`. The context path points to a mode-`0600` JSON file
+containing verified bounded mission context. ChainProof removes it when the
+wrapper returns after child exit; forced wrapper termination can leave it in
+the operating system temporary directory. Harness integrations read this file
+before work and use the IDs when recording evidence or writing a checkpoint. See
+[Agent Work Protocol v1](../spec/agent-work-v1.md).
+
 The mission's agent name is inherited unless `--agent` explicitly overrides
 it. Run metadata records `mission_id`; provenance events keep their existing v1
 shape and proof semantics.
