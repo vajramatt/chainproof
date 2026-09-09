@@ -10,6 +10,7 @@ import (
 	"testing"
 
 	"github.com/vajramatt/chainproof/internal/adapters/codex"
+	"github.com/vajramatt/chainproof/internal/continuity"
 	"github.com/vajramatt/chainproof/internal/proof"
 	"github.com/vajramatt/chainproof/internal/store"
 )
@@ -108,5 +109,72 @@ func TestServerRejectsNonLocalHostHeader(t *testing.T) {
 	app.http.Handler.ServeHTTP(response, request)
 	if response.Code != http.StatusForbidden {
 		t.Fatalf("expected 403, got %d", response.Code)
+	}
+}
+
+func TestMissionAPIStartsAndResumesDurableContext(t *testing.T) {
+	db, err := store.Open(filepath.Join(t.TempDir(), "test.db"))
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer db.Close()
+	run, _ := db.Start(context.Background(), "builder", "codex", "gpt-test", nil)
+	db.Append(context.Background(), run.ID, proof.EventInput{Kind: "tool.result", Source: proof.Source{Adapter: "test", Mode: "observed"}})
+	app := New(db, "127.0.0.1:0", NewStatus("test"))
+
+	request := httptest.NewRequest(http.MethodPost, "http://localhost/api/missions", strings.NewReader(`{"agent":"builder","objective":"Ship continuity"}`))
+	response := httptest.NewRecorder()
+	app.http.Handler.ServeHTTP(response, request)
+	if response.Code != http.StatusCreated {
+		t.Fatalf("start mission status %d: %s", response.Code, response.Body.String())
+	}
+	var mission continuity.Mission
+	if err = json.NewDecoder(response.Body).Decode(&mission); err != nil {
+		t.Fatal(err)
+	}
+
+	checkpointBody := `{"run_id":"` + run.ID + `","summary":"Storage works","next_actions":["add CLI"]}`
+	request = httptest.NewRequest(http.MethodPost, "http://localhost/api/missions/"+mission.ID+"/checkpoints", strings.NewReader(checkpointBody))
+	response = httptest.NewRecorder()
+	app.http.Handler.ServeHTTP(response, request)
+	if response.Code != http.StatusCreated {
+		t.Fatalf("checkpoint status %d: %s", response.Code, response.Body.String())
+	}
+
+	request = httptest.NewRequest(http.MethodGet, "http://localhost/api/missions/"+mission.ID+"/resume", nil)
+	response = httptest.NewRecorder()
+	app.http.Handler.ServeHTTP(response, request)
+	if response.Code != http.StatusOK {
+		t.Fatalf("resume status %d: %s", response.Code, response.Body.String())
+	}
+	var resumed continuity.Resume
+	if err = json.NewDecoder(response.Body).Decode(&resumed); err != nil {
+		t.Fatal(err)
+	}
+	if resumed.Checkpoint == nil || resumed.Checkpoint.Summary != "Storage works" || !resumed.Verification.Valid {
+		t.Fatalf("unexpected resume response: %+v", resumed)
+	}
+}
+
+func TestRunAPIBindsToMissionAndInheritsAgent(t *testing.T) {
+	db, err := store.Open(filepath.Join(t.TempDir(), "test.db"))
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer db.Close()
+	mission, _ := db.StartMission(context.Background(), continuity.MissionInput{Agent: "durable-agent", Objective: "Run through API"})
+	app := New(db, "127.0.0.1:0", NewStatus("test"))
+	request := httptest.NewRequest(http.MethodPost, "http://localhost/api/runs", strings.NewReader(`{"mission_id":"`+mission.ID+`","harness":"custom"}`))
+	response := httptest.NewRecorder()
+	app.http.Handler.ServeHTTP(response, request)
+	if response.Code != http.StatusCreated {
+		t.Fatalf("start run status %d: %s", response.Code, response.Body.String())
+	}
+	var run proof.Run
+	if err = json.NewDecoder(response.Body).Decode(&run); err != nil {
+		t.Fatal(err)
+	}
+	if run.Agent != "durable-agent" || run.Metadata["mission_id"] != mission.ID {
+		t.Fatalf("run not bound to mission: %+v", run)
 	}
 }

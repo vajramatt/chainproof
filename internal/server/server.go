@@ -4,11 +4,13 @@ import (
 	"context"
 	_ "embed"
 	"encoding/json"
+	"errors"
 	"io"
 	"net/http"
 	"strconv"
 	"strings"
 
+	"github.com/vajramatt/chainproof/internal/continuity"
 	"github.com/vajramatt/chainproof/internal/proof"
 	"github.com/vajramatt/chainproof/internal/store"
 )
@@ -26,6 +28,9 @@ func New(db *store.Store, address string, status *Status) *Server {
 	s := &Server{store: db, status: status}
 	mux := http.NewServeMux()
 	mux.HandleFunc("GET /api/runs", s.listRuns)
+	mux.HandleFunc("POST /api/missions", s.startMission)
+	mux.HandleFunc("POST /api/missions/{id}/checkpoints", s.createCheckpoint)
+	mux.HandleFunc("GET /api/missions/{id}/resume", s.resumeMission)
 	mux.HandleFunc("GET /api/status", s.getStatus)
 	mux.HandleFunc("GET /api/search", s.search)
 	mux.HandleFunc("GET /api/events/{id}", s.getEvent)
@@ -41,6 +46,45 @@ func New(db *store.Store, address string, status *Status) *Server {
 	mux.HandleFunc("GET /", web)
 	s.http = &http.Server{Addr: address, Handler: localhostOnly(cors(mux))}
 	return s
+}
+
+func (s *Server) startMission(w http.ResponseWriter, r *http.Request) {
+	var input continuity.MissionInput
+	err := decode(r, &input)
+	if err == nil {
+		var mission continuity.Mission
+		mission, err = s.store.StartMission(r.Context(), input)
+		respond(w, mission, err, http.StatusCreated)
+		return
+	}
+	respond(w, nil, err, 0)
+}
+
+func (s *Server) createCheckpoint(w http.ResponseWriter, r *http.Request) {
+	var input struct {
+		RunID       string                   `json:"run_id"`
+		Source      proof.Source             `json:"source,omitempty"`
+		Summary     string                   `json:"summary"`
+		NextActions []string                 `json:"next_actions,omitempty"`
+		Blockers    []string                 `json:"blockers,omitempty"`
+		Evidence    []continuity.EvidenceRef `json:"evidence,omitempty"`
+		Extensions  map[string]any           `json:"extensions,omitempty"`
+	}
+	err := decode(r, &input)
+	if err == nil {
+		var checkpoint continuity.Checkpoint
+		checkpoint, err = s.store.CreateCheckpoint(r.Context(), r.PathValue("id"), input.RunID, continuity.CheckpointInput{
+			Source: input.Source, Summary: input.Summary, NextActions: input.NextActions, Blockers: input.Blockers, Evidence: input.Evidence, Extensions: input.Extensions,
+		})
+		respond(w, checkpoint, err, http.StatusCreated)
+		return
+	}
+	respond(w, nil, err, 0)
+}
+
+func (s *Server) resumeMission(w http.ResponseWriter, r *http.Request) {
+	resume, err := s.store.ResumeMission(r.Context(), r.PathValue("id"))
+	respond(w, resume, err, http.StatusOK)
 }
 
 func (s *Server) search(w http.ResponseWriter, r *http.Request) {
@@ -70,11 +114,32 @@ func (s *Server) listRuns(w http.ResponseWriter, r *http.Request) {
 }
 func (s *Server) startRun(w http.ResponseWriter, r *http.Request) {
 	var in struct {
-		Agent, Harness, Model string
-		Metadata              map[string]any
+		Agent     string         `json:"agent"`
+		Harness   string         `json:"harness"`
+		Model     string         `json:"model"`
+		MissionID string         `json:"mission_id"`
+		Metadata  map[string]any `json:"metadata"`
 	}
 	e := decode(r, &in)
 	if e == nil {
+		if in.Metadata == nil {
+			in.Metadata = map[string]any{}
+		}
+		if in.MissionID != "" {
+			mission, missionErr := s.store.Mission(r.Context(), in.MissionID)
+			if missionErr != nil {
+				respond(w, nil, missionErr, 0)
+				return
+			}
+			if mission.Status != "active" {
+				respond(w, nil, errors.New("mission is "+mission.Status), 0)
+				return
+			}
+			if in.Agent == "" {
+				in.Agent = mission.Agent
+			}
+			in.Metadata["mission_id"] = mission.ID
+		}
 		var v proof.Run
 		v, e = s.store.Start(r.Context(), in.Agent, in.Harness, in.Model, in.Metadata)
 		respond(w, v, e, http.StatusCreated)

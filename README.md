@@ -14,8 +14,8 @@
   <a href="spec/provenance-v1.md">Proof format</a>
 </p>
 
-ChainProof is a local-first provenance ledger and investigation cockpit for AI
-agents — one Go binary, one SQLite database, and a hash chain you can verify
+ChainProof is local-first continuity and provenance infrastructure for AI
+agents — one Go binary, one SQLite database, and hash chains you can verify
 without trusting ChainProof.
 
 Run Codex, Claude Code, Kimi, Qwen, OpenClaw, a local model, or your own
@@ -27,7 +27,7 @@ collection source, and cryptographic continuity.
   <img src="docs/screen.svg" alt="ChainProof TUI showing local runs, chain integrity, and a live provenance feed" width="820">
 </p>
 
-It is built to answer four questions after an agent has been at work:
+It is built to answer five questions while agent work crosses sessions:
 
 - **What happened?** Read the run as a sequence of inputs, tool calls, outputs,
   decisions, artifacts, errors, and human events.
@@ -37,6 +37,8 @@ It is built to answer four questions after an agent has been at work:
   proof to someone who has never installed or trusted your database.
 - **Is it ready to ship?** Jump to failures, changes, decisions, and policy
   evidence without digging through a raw agent transcript.
+- **What happens next?** Resume a durable mission from its latest verified
+  checkpoint, including pending actions, blockers, and cited evidence.
 
 No account. No API key. No tenant. No pricing page. The ledger lives on your
 machine and the code is MIT licensed.
@@ -163,6 +165,43 @@ chainproof serve           # local web dashboard at 127.0.0.1:7331
 Wrapping records the process lifecycle and exit status as **observed**. It does
 not magically reveal internal tool calls or private model reasoning. A native
 hook, push integration, or pull adapter provides the richer event stream.
+
+## Continue across sessions
+
+A run records one bounded execution. A mission links runs into durable work.
+Each checkpoint carries a required summary, next actions, blockers, and
+optional evidence references, then anchors that state to an exact run-proof
+prefix.
+
+```sh
+chainproof mission start --agent builder --objective "Ship durable continuity"
+chainproof run --mission MISSION_ID -- codex
+chainproof checkpoint MISSION_ID RUN_ID '{
+  "summary": "Storage and API tests pass",
+  "next_actions": ["add mission UI"],
+  "blockers": []
+}'
+chainproof resume MISSION_ID
+```
+
+`chainproof resume` without an ID loads the most recently updated active
+mission. It returns the latest checkpoint together with verification state, so
+an agent can reject broken inherited context instead of silently trusting it.
+Agents using the localhost API can pass `mission_id` when creating a run, then
+write checkpoints through `/api/missions/{mission_id}/checkpoints`.
+
+Export the mission and every anchored run prefix as one portable session proof:
+
+```sh
+chainproof mission export MISSION_ID continuity-proof.json
+chainproof verify-continuity-file continuity-proof.json
+chainproof mission complete MISSION_ID
+```
+
+Checkpoint integrity does not make a summary true. Agent identity is a local
+name in continuity v1, not a cryptographic signature. See
+[`docs/continuity.md`](docs/continuity.md) for the workflow and
+[`spec/continuity-v1.md`](spec/continuity-v1.md) for the exact proof boundary.
 
 ## The run cockpit
 
@@ -399,6 +438,9 @@ It does not edit the repositories or harness histories it observes.
 | `chainproof daemon` | run the collector and local API in the foreground |
 | `chainproof service install` | install and start a login service |
 | `chainproof service status` | inspect the native user service |
+| `chainproof mission start` | start durable work across sessions |
+| `chainproof mission complete` | close a mission after a valid checkpoint |
+| `chainproof mission export` | export checkpoints and anchored run proofs |
 | `chainproof start` | open a provenance run |
 | `chainproof append` | append one reported event |
 | `chainproof ingest` | import JSONL from stdin |
@@ -408,6 +450,9 @@ It does not edit the repositories or harness histories it observes.
 | `chainproof verify` | verify a run in the local ledger |
 | `chainproof export` | write a portable proof bundle |
 | `chainproof verify-file` | independently verify a bundle |
+| `chainproof checkpoint` | anchor resumable state to a run-proof prefix |
+| `chainproof resume` | verify and load the latest mission checkpoint |
+| `chainproof verify-continuity-file` | verify portable mission proof offline |
 | `chainproof list` | print local runs as JSON |
 | `chainproof search QUERY` | search structured local provenance evidence |
 | `chainproof codex sync` | discover and import Codex sessions once |

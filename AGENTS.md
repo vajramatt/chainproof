@@ -1,8 +1,9 @@
 # ChainProof OSS
 
-ChainProof is the MIT-licensed, local-first provenance ledger for AI agents. This
-repository owns the Go CLI, TUI, embedded local web explorer, SQLite data model,
-agent integrations, proof format, and release artifacts.
+ChainProof is the MIT-licensed, local-first continuity and provenance ledger for
+AI agents. This repository owns durable missions and checkpoints, the Go CLI,
+TUI, embedded local web explorer, SQLite data model, agent integrations, proof
+formats, and release artifacts.
 
 ## Repository boundary
 
@@ -20,6 +21,8 @@ agent integrations, proof format, and release artifacts.
 - Stay local-first: the core product must work without an account, API key, or
   external service.
 - Keep the canonical ledger append-only and independently verifiable.
+- Keep mission checkpoints append-only, bind them to exact run-proof prefixes,
+  and preserve their separate proof boundary.
 - Describe proof boundaries precisely: a valid hash chain proves that recorded
   evidence has not changed; it does not prove that a reported or imported claim
   was true.

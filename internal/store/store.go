@@ -29,6 +29,9 @@ func Open(path string) (*Store, error) {
 		CREATE TABLE IF NOT EXISTS import_cursors(adapter TEXT NOT NULL,source TEXT NOT NULL,cursor TEXT NOT NULL,updated_at TEXT NOT NULL,PRIMARY KEY(adapter,source));
 		CREATE TABLE IF NOT EXISTS source_runs(adapter TEXT NOT NULL,source TEXT NOT NULL,run_id TEXT NOT NULL REFERENCES runs(run_id),created_at TEXT NOT NULL,PRIMARY KEY(adapter,source));
 	CREATE TABLE IF NOT EXISTS artifacts(hash TEXT PRIMARY KEY,media_type TEXT NOT NULL,body BLOB NOT NULL,size INTEGER NOT NULL,created_at TEXT NOT NULL);
+	CREATE TABLE IF NOT EXISTS missions(mission_id TEXT PRIMARY KEY,agent TEXT NOT NULL,objective TEXT NOT NULL,status TEXT NOT NULL,created_at TEXT NOT NULL,updated_at TEXT NOT NULL,checkpoint_count INTEGER NOT NULL,chain_head TEXT NOT NULL,metadata TEXT NOT NULL);
+	CREATE TABLE IF NOT EXISTS mission_runs(mission_id TEXT NOT NULL REFERENCES missions(mission_id),run_id TEXT NOT NULL REFERENCES runs(run_id),attached_at TEXT NOT NULL,PRIMARY KEY(mission_id,run_id),UNIQUE(run_id));
+	CREATE TABLE IF NOT EXISTS checkpoints(checkpoint_id TEXT PRIMARY KEY,mission_id TEXT NOT NULL REFERENCES missions(mission_id),sequence INTEGER NOT NULL,timestamp TEXT NOT NULL,checkpoint_json TEXT NOT NULL,checkpoint_hash TEXT NOT NULL,UNIQUE(mission_id,sequence));
 	CREATE TABLE IF NOT EXISTS provenance_index(event_id TEXT PRIMARY KEY REFERENCES events(event_id) ON DELETE CASCADE,run_id TEXT NOT NULL REFERENCES runs(run_id),sequence INTEGER NOT NULL,timestamp TEXT NOT NULL,agent TEXT NOT NULL,harness TEXT NOT NULL,model TEXT NOT NULL,kind TEXT NOT NULL,collection_mode TEXT NOT NULL,tool TEXT NOT NULL,status TEXT NOT NULL,summary TEXT NOT NULL,search_text TEXT NOT NULL);
 	CREATE INDEX IF NOT EXISTS events_run_sequence ON events(run_id,sequence);
 	CREATE INDEX IF NOT EXISTS provenance_run_sequence ON provenance_index(run_id,sequence);
