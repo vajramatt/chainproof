@@ -111,7 +111,7 @@ func run(args []string) error {
 		return nil
 	case "mission":
 		if len(args) < 2 {
-			return errors.New("usage: chainproof mission start|complete")
+			return errors.New("usage: chainproof mission start|list|complete|export")
 		}
 		switch args[1] {
 		case "start":
@@ -129,6 +129,15 @@ func run(args []string) error {
 			}
 			mission, completeErr := db.CompleteMission(ctx, args[2])
 			return output(mission, completeErr)
+		case "list":
+			fs := flag.NewFlagSet("mission list", flag.ContinueOnError)
+			status := fs.String("status", "", "")
+			limit := fs.Int("limit", 100, "")
+			if e = fs.Parse(args[2:]); e != nil {
+				return e
+			}
+			missions, listErr := db.Missions(ctx, *status, *limit)
+			return output(missions, listErr)
 		case "export":
 			if len(args) < 3 {
 				return errors.New("usage: chainproof mission export MISSION_ID [PROOF.json]")
@@ -150,7 +159,7 @@ func run(args []string) error {
 			fmt.Println(args[3])
 			return nil
 		default:
-			return errors.New("usage: chainproof mission start|complete|export")
+			return errors.New("usage: chainproof mission start|list|complete|export")
 		}
 	case "start":
 		fs := flag.NewFlagSet("start", flag.ContinueOnError)
@@ -518,6 +527,8 @@ Usage:
   chainproof service status                 Inspect the user service
   chainproof mission start --agent A --objective O
                                               Start durable work across sessions
+  chainproof mission list [--status active|completed] [--limit N]
+                                              Discover durable missions
   chainproof mission complete MISSION_ID      Close after a valid checkpoint
   chainproof mission export MISSION_ID [FILE] Export portable continuity proof
   chainproof start [--agent A --harness H --model M --mission ID]

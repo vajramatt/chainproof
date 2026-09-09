@@ -175,6 +175,7 @@ then anchors that state to an exact run-proof prefix.
 
 ```sh
 chainproof mission start --agent builder --objective "Ship durable continuity"
+chainproof mission list --status active
 chainproof run --mission MISSION_ID -- codex
 chainproof checkpoint MISSION_ID RUN_ID '{
   "summary": "Storage and API tests pass",
@@ -448,6 +449,7 @@ It does not edit the repositories or harness histories it observes.
 | `chainproof service install` | install and start a login service |
 | `chainproof service status` | inspect the native user service |
 | `chainproof mission start` | start durable work across sessions |
+| `chainproof mission list` | discover missions by status |
 | `chainproof mission complete` | close a mission after a valid checkpoint |
 | `chainproof mission export` | export checkpoints and anchored run proofs |
 | `chainproof start` | open a provenance run |

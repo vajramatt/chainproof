@@ -55,6 +55,40 @@ func (s *Store) ActiveMission(ctx context.Context) (continuity.Mission, error) {
 	return mission, err
 }
 
+func (s *Store) Missions(ctx context.Context, status string, limit int) ([]continuity.Mission, error) {
+	if status != "" && status != "active" && status != "completed" {
+		return nil, errors.New("invalid mission status")
+	}
+	if limit <= 0 {
+		limit = 100
+	}
+	if limit > 1000 {
+		limit = 1000
+	}
+	query := `SELECT mission_id,agent,objective,status,created_at,updated_at,checkpoint_count,chain_head,metadata FROM missions`
+	args := []any{}
+	if status != "" {
+		query += ` WHERE status=?`
+		args = append(args, status)
+	}
+	query += ` ORDER BY updated_at DESC LIMIT ?`
+	args = append(args, limit)
+	rows, err := s.db.QueryContext(ctx, query, args...)
+	if err != nil {
+		return nil, err
+	}
+	defer rows.Close()
+	missions := []continuity.Mission{}
+	for rows.Next() {
+		mission, scanErr := scanMission(rows)
+		if scanErr != nil {
+			return nil, scanErr
+		}
+		missions = append(missions, mission)
+	}
+	return missions, rows.Err()
+}
+
 func (s *Store) CreateCheckpoint(ctx context.Context, missionID, runID string, input continuity.CheckpointInput) (continuity.Checkpoint, error) {
 	tx, err := s.db.BeginTx(ctx, nil)
 	if err != nil {

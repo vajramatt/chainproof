@@ -29,6 +29,7 @@ func New(db *store.Store, address string, status *Status) *Server {
 	mux := http.NewServeMux()
 	mux.HandleFunc("GET /api/runs", s.listRuns)
 	mux.HandleFunc("POST /api/missions", s.startMission)
+	mux.HandleFunc("GET /api/missions", s.listMissions)
 	mux.HandleFunc("POST /api/missions/{id}/checkpoints", s.createCheckpoint)
 	mux.HandleFunc("GET /api/missions/{id}/resume", s.resumeMission)
 	mux.HandleFunc("GET /api/missions/{id}/context", s.missionContext)
@@ -59,6 +60,20 @@ func (s *Server) startMission(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 	respond(w, nil, err, 0)
+}
+
+func (s *Server) listMissions(w http.ResponseWriter, r *http.Request) {
+	limit := 100
+	var err error
+	if raw := r.URL.Query().Get("limit"); raw != "" {
+		limit, err = strconv.Atoi(raw)
+	}
+	if err != nil {
+		respond(w, nil, errors.New("limit must be an integer"), 0)
+		return
+	}
+	missions, err := s.store.Missions(r.Context(), r.URL.Query().Get("status"), limit)
+	respond(w, missions, err, http.StatusOK)
 }
 
 func (s *Server) createCheckpoint(w http.ResponseWriter, r *http.Request) {

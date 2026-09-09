@@ -183,6 +183,29 @@ func TestMissionContextAPICompilesVerifiedState(t *testing.T) {
 	}
 }
 
+func TestMissionListAPIShowsDiscoverableWork(t *testing.T) {
+	db, err := store.Open(filepath.Join(t.TempDir(), "test.db"))
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer db.Close()
+	db.StartMission(context.Background(), continuity.MissionInput{Agent: "builder", Objective: "Discover me"})
+	app := New(db, "127.0.0.1:0", NewStatus("test"))
+	request := httptest.NewRequest(http.MethodGet, "http://localhost/api/missions?status=active&limit=10", nil)
+	response := httptest.NewRecorder()
+	app.http.Handler.ServeHTTP(response, request)
+	if response.Code != http.StatusOK {
+		t.Fatalf("list status %d: %s", response.Code, response.Body.String())
+	}
+	var missions []continuity.Mission
+	if err = json.NewDecoder(response.Body).Decode(&missions); err != nil {
+		t.Fatal(err)
+	}
+	if len(missions) != 1 || missions[0].Objective != "Discover me" {
+		t.Fatalf("unexpected mission list: %+v", missions)
+	}
+}
+
 func TestRunAPIBindsToMissionAndInheritsAgent(t *testing.T) {
 	db, err := store.Open(filepath.Join(t.TempDir(), "test.db"))
 	if err != nil {

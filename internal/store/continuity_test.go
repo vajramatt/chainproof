@@ -248,3 +248,35 @@ func TestBuildMissionContextRefusesInvalidContinuity(t *testing.T) {
 		t.Fatalf("invalid continuity produced context: %v", err)
 	}
 }
+
+func TestMissionsListsMostRecentAndFiltersStatus(t *testing.T) {
+	s, err := Open(t.TempDir() + "/test.db")
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer s.Close()
+	ctx := context.Background()
+	first, _ := s.StartMission(ctx, continuity.MissionInput{Agent: "builder", Objective: "First"})
+	run, _ := s.Start(ctx, "builder", "codex", "gpt-test", nil)
+	s.CreateCheckpoint(ctx, first.ID, run.ID, continuity.CheckpointInput{Summary: "Done"})
+	s.CompleteMission(ctx, first.ID)
+	latest, _ := s.StartMission(ctx, continuity.MissionInput{Agent: "builder", Objective: "Latest"})
+
+	active, err := s.Missions(ctx, "active", 10)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if len(active) != 1 || active[0].ID != latest.ID {
+		t.Fatalf("unexpected active missions: %+v", active)
+	}
+	all, err := s.Missions(ctx, "", 1)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if len(all) != 1 || all[0].ID != latest.ID {
+		t.Fatalf("missions not bounded and recent-first: %+v", all)
+	}
+	if _, err = s.Missions(ctx, "paused", 10); err == nil || !strings.Contains(err.Error(), "invalid mission status") {
+		t.Fatalf("invalid status accepted: %v", err)
+	}
+}

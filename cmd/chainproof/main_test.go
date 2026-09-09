@@ -130,6 +130,24 @@ func TestContextCLICompilesVerifiedMissionState(t *testing.T) {
 	}
 }
 
+func TestMissionListCLIShowsDiscoverableWork(t *testing.T) {
+	t.Setenv("CHAINPROOF_DB", filepath.Join(t.TempDir(), "chainproof.db"))
+	t.Setenv("CHAINPROOF_CODEX_DISABLED", "1")
+	captureStdout(t, func() error {
+		return run([]string{"mission", "start", "--agent", "builder", "--objective", "Discover me"})
+	})
+	listedJSON := captureStdout(t, func() error {
+		return run([]string{"mission", "list", "--status", "active", "--limit", "10"})
+	})
+	var missions []continuity.Mission
+	if err := json.Unmarshal([]byte(listedJSON), &missions); err != nil {
+		t.Fatal(err)
+	}
+	if len(missions) != 1 || missions[0].Objective != "Discover me" {
+		t.Fatalf("unexpected mission list: %+v", missions)
+	}
+}
+
 func TestStartRunInheritsMissionAgent(t *testing.T) {
 	t.Setenv("CHAINPROOF_DB", filepath.Join(t.TempDir(), "chainproof.db"))
 	t.Setenv("CHAINPROOF_CODEX_DISABLED", "1")

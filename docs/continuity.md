@@ -17,6 +17,12 @@ Save the returned `mission_id`. A mission persists until explicitly completed.
 `chainproof resume` without an ID selects the most recently updated active
 mission.
 
+Discover existing work without retaining IDs outside ChainProof:
+
+```sh
+chainproof mission list --status active
+```
+
 ## Work inside the mission
 
 Start a run manually:
@@ -125,6 +131,7 @@ mission from being marked complete without resumable or reviewable evidence.
 
 ```text
 POST /api/missions
+GET  /api/missions?status=active&limit=100
 POST /api/missions/{mission_id}/checkpoints
 GET  /api/missions/{mission_id}/resume
 GET  /api/missions/{mission_id}/context?max_evidence=20
