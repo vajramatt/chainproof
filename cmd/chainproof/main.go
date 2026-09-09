@@ -301,6 +301,22 @@ func run(args []string) error {
 		}
 		resume, resumeErr := db.ResumeMission(ctx, missionID)
 		return output(resume, resumeErr)
+	case "context":
+		fs := flag.NewFlagSet("context", flag.ContinueOnError)
+		missionID := fs.String("mission", "", "")
+		maxEvidence := fs.Int("max-evidence", 20, "")
+		if e = fs.Parse(args[1:]); e != nil {
+			return e
+		}
+		if *missionID == "" {
+			mission, missionErr := db.ActiveMission(ctx)
+			if missionErr != nil {
+				return missionErr
+			}
+			*missionID = mission.ID
+		}
+		compiled, contextErr := db.BuildMissionContext(ctx, *missionID, *maxEvidence)
+		return output(compiled, contextErr)
 	case "ui":
 		watchCtx, cancel := context.WithCancel(ctx)
 		defer cancel()
@@ -520,6 +536,8 @@ Usage:
   chainproof checkpoint MISSION_ID RUN_ID [JSON]
                                               Anchor resumable state to run proof
   chainproof resume [MISSION_ID]             Verify and load latest checkpoint
+  chainproof context [--mission ID] [--max-evidence N]
+                                              Compile bounded verified agent context
   chainproof codex sync                     Discover/import Codex sessions once
   chainproof codex watch                    Continuously follow Codex sessions
   chainproof version

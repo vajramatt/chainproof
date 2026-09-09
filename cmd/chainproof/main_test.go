@@ -97,6 +97,39 @@ func TestResumeWithoutIDUsesMostRecentActiveMission(t *testing.T) {
 	}
 }
 
+func TestContextCLICompilesVerifiedMissionState(t *testing.T) {
+	t.Setenv("CHAINPROOF_DB", filepath.Join(t.TempDir(), "chainproof.db"))
+	t.Setenv("CHAINPROOF_CODEX_DISABLED", "1")
+	missionJSON := captureStdout(t, func() error {
+		return run([]string{"mission", "start", "--agent", "builder", "--objective", "Resume safely"})
+	})
+	var mission continuity.Mission
+	if err := json.Unmarshal([]byte(missionJSON), &mission); err != nil {
+		t.Fatal(err)
+	}
+	runJSON := captureStdout(t, func() error { return run([]string{"start", "--mission", mission.ID}) })
+	var agentRun proof.Run
+	if err := json.Unmarshal([]byte(runJSON), &agentRun); err != nil {
+		t.Fatal(err)
+	}
+	if err := run([]string{"append", agentRun.ID, `{"kind":"decision","source":{"adapter":"test","mode":"reported"},"payload":{"choice":"continue"}}`}); err != nil {
+		t.Fatal(err)
+	}
+	captureStdout(t, func() error {
+		return run([]string{"checkpoint", mission.ID, agentRun.ID, `{"summary":"Ready to resume"}`})
+	})
+	contextJSON := captureStdout(t, func() error {
+		return run([]string{"context", "--mission", mission.ID, "--max-evidence", "1"})
+	})
+	var compiled continuity.MissionContext
+	if err := json.Unmarshal([]byte(contextJSON), &compiled); err != nil {
+		t.Fatal(err)
+	}
+	if compiled.Checkpoint == nil || compiled.Checkpoint.Summary != "Ready to resume" || !compiled.Verification.Valid || compiled.Source.Mode != "derived" {
+		t.Fatalf("unexpected compiled context: %+v", compiled)
+	}
+}
+
 func TestStartRunInheritsMissionAgent(t *testing.T) {
 	t.Setenv("CHAINPROOF_DB", filepath.Join(t.TempDir(), "chainproof.db"))
 	t.Setenv("CHAINPROOF_CODEX_DISABLED", "1")

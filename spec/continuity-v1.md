@@ -27,15 +27,23 @@ Every hashed checkpoint contains these fields:
 9. `objective_hash` — SHA-256 of the mission objective's UTF-8 bytes
 10. `run` — anchored `run_id`, `entry_count`, and `chain_head`
 11. `summary` — required resumable state written at the checkpoint
-12. `next_actions` — ordered pending actions
-13. `blockers` — ordered conditions preventing progress
-14. `evidence` — event IDs from the anchored run prefix, with optional notes
-15. `extensions` — namespaced extension data
+12. `commitments` — optional ordered stable obligations with ID, description,
+    status, acceptance criteria, and evidence references; omitted when empty
+13. `next_actions` — ordered pending actions
+14. `blockers` — ordered conditions preventing progress
+15. `evidence` — event IDs from the anchored run prefix, with optional notes
+16. `extensions` — namespaced extension data
 
 Checkpoint source defaults to `reported` with adapter `continuity`. Objects use
 provenance v1 canonical JSON. Arrays retain order. The
 `checkpoint_hash` annotation is excluded from hashed bytes. Evidence references
 must resolve inside the run prefix named by the checkpoint.
+
+Commitment status is `pending`, `blocked`, or `completed`. IDs are unique per
+checkpoint. Once declared, a commitment's description and acceptance criteria
+are immutable, completed status is terminal, and every later checkpoint must
+retain the commitment. Commitment evidence must also resolve inside the
+checkpoint's anchored run prefix.
 
 ## Checkpoint chain
 
@@ -50,7 +58,8 @@ mission chain head = final checkpoint hash
 
 Every checkpoint carries the previous checkpoint hash. Verification checks
 genesis, contiguous sequences, mission and agent identity, objective hash,
-every hash link, checkpoint count, and declared mission chain head.
+every hash link, commitment definitions and terminal transitions, checkpoint
+count, and declared mission chain head.
 
 ## Run anchors
 
@@ -69,6 +78,16 @@ numbers below the anchored entry count.
 
 Offline verification checks both chains and requires every bundled run proof
 to match its checkpoint's run ID, entry count, and chain head exactly.
+
+## Derived context envelope
+
+`chainproof context` emits schema version `1` with source adapter
+`context-compiler` and mode `derived`. It contains the mission, latest
+checkpoint, continuity verification result, and a bounded list of canonical
+events cited by that checkpoint. Evidence is ordered by first citation,
+deduplicated by event ID, and annotated with `evidence_truncated` when capped.
+The envelope is a rebuildable view, not canonical proof material, and must not
+be emitted when mission or run-anchor verification fails.
 
 ## Proof boundary
 

@@ -4,6 +4,8 @@ import (
 	"crypto/sha256"
 	"encoding/hex"
 	"errors"
+	"fmt"
+	"slices"
 	"strings"
 	"time"
 
@@ -42,10 +44,19 @@ type EvidenceRef struct {
 	Note    string `json:"note,omitempty"`
 }
 
+type Commitment struct {
+	ID                 string        `json:"id"`
+	Description        string        `json:"description"`
+	Status             string        `json:"status"`
+	AcceptanceCriteria []string      `json:"acceptance_criteria"`
+	Evidence           []EvidenceRef `json:"evidence"`
+}
+
 type CheckpointInput struct {
 	Run         RunAnchor      `json:"run"`
 	Source      proof.Source   `json:"source,omitempty"`
 	Summary     string         `json:"summary"`
+	Commitments []Commitment   `json:"commitments,omitempty"`
 	NextActions []string       `json:"next_actions,omitempty"`
 	Blockers    []string       `json:"blockers,omitempty"`
 	Evidence    []EvidenceRef  `json:"evidence,omitempty"`
@@ -64,6 +75,7 @@ type Checkpoint struct {
 	ObjectiveHash  string         `json:"objective_hash"`
 	Run            RunAnchor      `json:"run"`
 	Summary        string         `json:"summary"`
+	Commitments    []Commitment   `json:"commitments,omitempty"`
 	NextActions    []string       `json:"next_actions"`
 	Blockers       []string       `json:"blockers"`
 	Evidence       []EvidenceRef  `json:"evidence"`
@@ -83,6 +95,17 @@ type Resume struct {
 	Mission      Mission      `json:"mission"`
 	Checkpoint   *Checkpoint  `json:"checkpoint,omitempty"`
 	Verification Verification `json:"verification"`
+}
+
+type MissionContext struct {
+	SchemaVersion     string         `json:"schema_version"`
+	Source            proof.Source   `json:"source"`
+	Mission           Mission        `json:"mission"`
+	Checkpoint        *Checkpoint    `json:"checkpoint,omitempty"`
+	Verification      Verification   `json:"verification"`
+	Evidence          []proof.Event  `json:"evidence"`
+	EvidenceTruncated bool           `json:"evidence_truncated"`
+	Extensions        map[string]any `json:"extensions"`
 }
 
 type Bundle struct {
@@ -115,6 +138,10 @@ func NewCheckpoint(mission Mission, sequence int, previous string, at time.Time,
 	if !validMode(input.Source.Mode) {
 		return Checkpoint{}, errors.New("invalid checkpoint collection mode")
 	}
+	input.Commitments = nonNilCommitments(input.Commitments)
+	if err := validateCommitments(input.Commitments); err != nil {
+		return Checkpoint{}, err
+	}
 	checkpoint := Checkpoint{
 		SchemaVersion: "1",
 		ID:            uuid.NewString(),
@@ -127,6 +154,7 @@ func NewCheckpoint(mission Mission, sequence int, previous string, at time.Time,
 		ObjectiveHash: hashText(mission.Objective),
 		Run:           input.Run,
 		Summary:       input.Summary,
+		Commitments:   input.Commitments,
 		NextActions:   nonNilStrings(input.NextActions),
 		Blockers:      nonNilStrings(input.Blockers),
 		Evidence:      nonNilEvidence(input.Evidence),
@@ -158,6 +186,7 @@ func Verify(mission Mission, checkpoints []Checkpoint) Verification {
 		return Verification{Valid: false, Reason: "checkpoint_count_mismatch", CheckpointCount: len(checkpoints), ChainHead: mission.ChainHead}
 	}
 	previous := GenesisHash
+	previousCommitments := map[string]Commitment{}
 	for i, checkpoint := range checkpoints {
 		sequence := i
 		if checkpoint.SchemaVersion != "1" || checkpoint.MissionID != mission.ID || checkpoint.Agent != mission.Agent || checkpoint.ObjectiveHash != hashText(mission.Objective) || checkpoint.Sequence != i || checkpoint.PreviousHash != previous {
@@ -167,6 +196,10 @@ func Verify(mission Mission, checkpoints []Checkpoint) Verification {
 		if err != nil || hash != checkpoint.CheckpointHash {
 			return Verification{Valid: false, Reason: "checkpoint_hash_mismatch", Sequence: &sequence, CheckpointCount: len(checkpoints), ChainHead: previous}
 		}
+		if validateCommitments(checkpoint.Commitments) != nil || !validCommitmentTransition(previousCommitments, checkpoint.Commitments) {
+			return Verification{Valid: false, Reason: "commitment_chain_mismatch", Sequence: &sequence, CheckpointCount: len(checkpoints), ChainHead: previous}
+		}
+		previousCommitments = commitmentMap(checkpoint.Commitments)
 		previous = hash
 	}
 	if mission.ChainHead != previous {
@@ -225,4 +258,59 @@ func nonNilEvidence(values []EvidenceRef) []EvidenceRef {
 		return []EvidenceRef{}
 	}
 	return values
+}
+
+func nonNilCommitments(values []Commitment) []Commitment {
+	if values == nil {
+		return []Commitment{}
+	}
+	for i := range values {
+		values[i].ID = strings.TrimSpace(values[i].ID)
+		values[i].Description = strings.TrimSpace(values[i].Description)
+		values[i].AcceptanceCriteria = nonNilStrings(values[i].AcceptanceCriteria)
+		values[i].Evidence = nonNilEvidence(values[i].Evidence)
+	}
+	return values
+}
+
+func validateCommitments(values []Commitment) error {
+	seen := make(map[string]struct{}, len(values))
+	for i := range values {
+		if strings.TrimSpace(values[i].ID) == "" {
+			return errors.New("commitment id is required")
+		}
+		if strings.TrimSpace(values[i].Description) == "" {
+			return fmt.Errorf("commitment %q description is required", values[i].ID)
+		}
+		if values[i].Status != "pending" && values[i].Status != "blocked" && values[i].Status != "completed" {
+			return fmt.Errorf("invalid commitment status for %q", values[i].ID)
+		}
+		if _, exists := seen[values[i].ID]; exists {
+			return fmt.Errorf("duplicate commitment id %q", values[i].ID)
+		}
+		seen[values[i].ID] = struct{}{}
+	}
+	return nil
+}
+
+func commitmentMap(values []Commitment) map[string]Commitment {
+	result := make(map[string]Commitment, len(values))
+	for _, value := range values {
+		result[value.ID] = value
+	}
+	return result
+}
+
+func validCommitmentTransition(previous map[string]Commitment, current []Commitment) bool {
+	currentByID := commitmentMap(current)
+	for id, prior := range previous {
+		next, exists := currentByID[id]
+		if !exists || next.Description != prior.Description || !slices.Equal(next.AcceptanceCriteria, prior.AcceptanceCriteria) {
+			return false
+		}
+		if prior.Status == "completed" && next.Status != "completed" {
+			return false
+		}
+	}
+	return true
 }

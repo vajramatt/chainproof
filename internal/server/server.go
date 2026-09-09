@@ -31,6 +31,7 @@ func New(db *store.Store, address string, status *Status) *Server {
 	mux.HandleFunc("POST /api/missions", s.startMission)
 	mux.HandleFunc("POST /api/missions/{id}/checkpoints", s.createCheckpoint)
 	mux.HandleFunc("GET /api/missions/{id}/resume", s.resumeMission)
+	mux.HandleFunc("GET /api/missions/{id}/context", s.missionContext)
 	mux.HandleFunc("GET /api/status", s.getStatus)
 	mux.HandleFunc("GET /api/search", s.search)
 	mux.HandleFunc("GET /api/events/{id}", s.getEvent)
@@ -65,6 +66,7 @@ func (s *Server) createCheckpoint(w http.ResponseWriter, r *http.Request) {
 		RunID       string                   `json:"run_id"`
 		Source      proof.Source             `json:"source,omitempty"`
 		Summary     string                   `json:"summary"`
+		Commitments []continuity.Commitment  `json:"commitments,omitempty"`
 		NextActions []string                 `json:"next_actions,omitempty"`
 		Blockers    []string                 `json:"blockers,omitempty"`
 		Evidence    []continuity.EvidenceRef `json:"evidence,omitempty"`
@@ -74,7 +76,7 @@ func (s *Server) createCheckpoint(w http.ResponseWriter, r *http.Request) {
 	if err == nil {
 		var checkpoint continuity.Checkpoint
 		checkpoint, err = s.store.CreateCheckpoint(r.Context(), r.PathValue("id"), input.RunID, continuity.CheckpointInput{
-			Source: input.Source, Summary: input.Summary, NextActions: input.NextActions, Blockers: input.Blockers, Evidence: input.Evidence, Extensions: input.Extensions,
+			Source: input.Source, Summary: input.Summary, Commitments: input.Commitments, NextActions: input.NextActions, Blockers: input.Blockers, Evidence: input.Evidence, Extensions: input.Extensions,
 		})
 		respond(w, checkpoint, err, http.StatusCreated)
 		return
@@ -85,6 +87,20 @@ func (s *Server) createCheckpoint(w http.ResponseWriter, r *http.Request) {
 func (s *Server) resumeMission(w http.ResponseWriter, r *http.Request) {
 	resume, err := s.store.ResumeMission(r.Context(), r.PathValue("id"))
 	respond(w, resume, err, http.StatusOK)
+}
+
+func (s *Server) missionContext(w http.ResponseWriter, r *http.Request) {
+	maxEvidence, err := strconv.Atoi(r.URL.Query().Get("max_evidence"))
+	if r.URL.Query().Get("max_evidence") == "" {
+		maxEvidence = 20
+		err = nil
+	}
+	if err != nil {
+		respond(w, nil, errors.New("max_evidence must be an integer"), 0)
+		return
+	}
+	compiled, err := s.store.BuildMissionContext(r.Context(), r.PathValue("id"), maxEvidence)
+	respond(w, compiled, err, http.StatusOK)
 }
 
 func (s *Server) search(w http.ResponseWriter, r *http.Request) {

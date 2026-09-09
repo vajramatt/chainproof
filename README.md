@@ -170,25 +170,34 @@ hook, push integration, or pull adapter provides the richer event stream.
 
 A run records one bounded execution. A mission links runs into durable work.
 Each checkpoint carries a required summary, next actions, blockers, and
-optional evidence references, then anchors that state to an exact run-proof
-prefix.
+stable commitments with acceptance criteria, and optional evidence references,
+then anchors that state to an exact run-proof prefix.
 
 ```sh
 chainproof mission start --agent builder --objective "Ship durable continuity"
 chainproof run --mission MISSION_ID -- codex
 chainproof checkpoint MISSION_ID RUN_ID '{
   "summary": "Storage and API tests pass",
+  "commitments": [{
+    "id": "mission-ui",
+    "description": "Add mission inspection view",
+    "status": "pending",
+    "acceptance_criteria": ["mission chain visible"]
+  }],
   "next_actions": ["add mission UI"],
   "blockers": []
 }'
 chainproof resume MISSION_ID
+chainproof context --mission MISSION_ID --max-evidence 20
 ```
 
 `chainproof resume` without an ID loads the most recently updated active
 mission. It returns the latest checkpoint together with verification state, so
 an agent can reject broken inherited context instead of silently trusting it.
 Agents using the localhost API can pass `mission_id` when creating a run, then
-write checkpoints through `/api/missions/{mission_id}/checkpoints`.
+write checkpoints through `/api/missions/{mission_id}/checkpoints`. `context`
+produces bounded derived model input only after verifying mission continuity
+and its cited run evidence.
 
 Export the mission and every anchored run prefix as one portable session proof:
 
@@ -452,6 +461,7 @@ It does not edit the repositories or harness histories it observes.
 | `chainproof verify-file` | independently verify a bundle |
 | `chainproof checkpoint` | anchor resumable state to a run-proof prefix |
 | `chainproof resume` | verify and load the latest mission checkpoint |
+| `chainproof context` | compile bounded verified mission context for an agent |
 | `chainproof verify-continuity-file` | verify portable mission proof offline |
 | `chainproof list` | print local runs as JSON |
 | `chainproof search QUERY` | search structured local provenance evidence |

@@ -1,6 +1,7 @@
 package continuity
 
 import (
+	"strings"
 	"testing"
 	"time"
 
@@ -109,5 +110,91 @@ func TestNewCheckpointRejectsUnknownProvenanceMode(t *testing.T) {
 	})
 	if err == nil || err.Error() != "invalid checkpoint collection mode" {
 		t.Fatalf("unknown checkpoint mode was accepted: %v", err)
+	}
+}
+
+func TestVerifyDetectsCommitmentStateTampering(t *testing.T) {
+	mission := Mission{ID: "mission-1", Agent: "builder", Objective: "Ship continuity"}
+	checkpoint, err := NewCheckpoint(mission, 0, GenesisHash, time.Now(), CheckpointInput{
+		Run:     RunAnchor{RunID: "run-1", ChainHead: GenesisHash},
+		Summary: "Implementation started",
+		Commitments: []Commitment{{
+			ID: "context", Description: "Build context compiler", Status: "pending",
+			AcceptanceCriteria: []string{"bounded output", "verified evidence"},
+		}},
+	})
+	if err != nil {
+		t.Fatal(err)
+	}
+	mission.CheckpointCount = 1
+	mission.ChainHead = checkpoint.CheckpointHash
+	checkpoint.Commitments[0].Status = "completed"
+	if got := Verify(mission, []Checkpoint{checkpoint}); got.Valid || got.Reason != "checkpoint_hash_mismatch" {
+		t.Fatalf("commitment tampering was not detected: %+v", got)
+	}
+}
+
+func TestNewCheckpointRejectsInvalidCommitments(t *testing.T) {
+	mission := Mission{ID: "mission-1", Agent: "builder", Objective: "Ship continuity"}
+	tests := []struct {
+		name        string
+		commitments []Commitment
+		want        string
+	}{
+		{name: "missing id", commitments: []Commitment{{Description: "Build context", Status: "pending"}}, want: "commitment id is required"},
+		{name: "missing description", commitments: []Commitment{{ID: "context", Status: "pending"}}, want: "description is required"},
+		{name: "invalid status", commitments: []Commitment{{ID: "context", Description: "Build context", Status: "started"}}, want: "invalid commitment status"},
+		{name: "duplicate id", commitments: []Commitment{{ID: "context", Description: "Build context", Status: "pending"}, {ID: "context", Description: "Build it", Status: "blocked"}}, want: "duplicate commitment id"},
+	}
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			_, err := NewCheckpoint(mission, 0, GenesisHash, time.Now(), CheckpointInput{
+				Run: RunAnchor{RunID: "run-1", ChainHead: GenesisHash}, Summary: "Work recorded", Commitments: tt.commitments,
+			})
+			if err == nil || !strings.Contains(err.Error(), tt.want) {
+				t.Fatalf("got %v, want error containing %q", err, tt.want)
+			}
+		})
+	}
+}
+
+func TestVerifyRejectsCommitmentDefinitionChange(t *testing.T) {
+	mission := Mission{ID: "mission-1", Agent: "builder", Objective: "Ship continuity"}
+	first, err := NewCheckpoint(mission, 0, GenesisHash, time.Now(), CheckpointInput{
+		Run: RunAnchor{RunID: "run-1", ChainHead: GenesisHash}, Summary: "Committed",
+		Commitments: []Commitment{{ID: "context", Description: "Build context", Status: "pending", AcceptanceCriteria: []string{"bounded"}}},
+	})
+	if err != nil {
+		t.Fatal(err)
+	}
+	second, err := NewCheckpoint(mission, 1, first.CheckpointHash, time.Now(), CheckpointInput{
+		Run: RunAnchor{RunID: "run-1", ChainHead: GenesisHash}, Summary: "Changed",
+		Commitments: []Commitment{{ID: "context", Description: "Build unrelated feature", Status: "pending", AcceptanceCriteria: []string{"bounded"}}},
+	})
+	if err != nil {
+		t.Fatal(err)
+	}
+	mission.CheckpointCount = 2
+	mission.ChainHead = second.CheckpointHash
+	if got := Verify(mission, []Checkpoint{first, second}); got.Valid || got.Reason != "commitment_chain_mismatch" {
+		t.Fatalf("commitment definition mutation verified: %+v", got)
+	}
+}
+
+func TestEmptyCommitmentsPreserveLegacyCheckpointEncoding(t *testing.T) {
+	mission := Mission{ID: "mission-1", Agent: "builder", Objective: "Ship continuity"}
+	checkpoint, err := NewCheckpoint(mission, 0, GenesisHash, time.Now(), CheckpointInput{
+		Run: RunAnchor{RunID: "run-1", ChainHead: GenesisHash}, Summary: "Legacy-compatible",
+	})
+	if err != nil {
+		t.Fatal(err)
+	}
+	checkpoint.CheckpointHash = ""
+	raw, err := proof.CanonicalJSON(checkpoint)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if strings.Contains(string(raw), `"commitments"`) {
+		t.Fatalf("empty commitments changed v1 canonical bytes: %s", raw)
 	}
 }

@@ -156,6 +156,33 @@ func TestMissionAPIStartsAndResumesDurableContext(t *testing.T) {
 	}
 }
 
+func TestMissionContextAPICompilesVerifiedState(t *testing.T) {
+	db, err := store.Open(filepath.Join(t.TempDir(), "test.db"))
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer db.Close()
+	ctx := context.Background()
+	mission, _ := db.StartMission(ctx, continuity.MissionInput{Agent: "builder", Objective: "Resume through API"})
+	run, _ := db.Start(ctx, "builder", "codex", "gpt-test", nil)
+	event, _ := db.Append(ctx, run.ID, proof.EventInput{Kind: "tool.result", Source: proof.Source{Adapter: "test", Mode: "observed"}})
+	db.CreateCheckpoint(ctx, mission.ID, run.ID, continuity.CheckpointInput{Summary: "Verified state", Evidence: []continuity.EvidenceRef{{EventID: event.ID}}})
+	app := New(db, "127.0.0.1:0", NewStatus("test"))
+	request := httptest.NewRequest(http.MethodGet, "http://localhost/api/missions/"+mission.ID+"/context?max_evidence=1", nil)
+	response := httptest.NewRecorder()
+	app.http.Handler.ServeHTTP(response, request)
+	if response.Code != http.StatusOK {
+		t.Fatalf("context status %d: %s", response.Code, response.Body.String())
+	}
+	var compiled continuity.MissionContext
+	if err = json.NewDecoder(response.Body).Decode(&compiled); err != nil {
+		t.Fatal(err)
+	}
+	if compiled.Checkpoint == nil || !compiled.Verification.Valid || len(compiled.Evidence) != 1 {
+		t.Fatalf("unexpected compiled context: %+v", compiled)
+	}
+}
+
 func TestRunAPIBindsToMissionAndInheritsAgent(t *testing.T) {
 	db, err := store.Open(filepath.Join(t.TempDir(), "test.db"))
 	if err != nil {

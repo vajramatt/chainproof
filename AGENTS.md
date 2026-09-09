@@ -23,6 +23,8 @@ formats, and release artifacts.
 - Keep the canonical ledger append-only and independently verifiable.
 - Keep mission checkpoints append-only, bind them to exact run-proof prefixes,
   and preserve their separate proof boundary.
+- Keep compiled agent context bounded, derived, evidence-linked, and gated on
+  successful mission and run-anchor verification.
 - Describe proof boundaries precisely: a valid hash chain proves that recorded
   evidence has not changed; it does not prove that a reported or imported claim
   was true.

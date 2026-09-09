@@ -74,6 +74,79 @@ func TestCreateCheckpointRejectsEvidenceOutsideAnchoredRun(t *testing.T) {
 	}
 }
 
+func TestCreateCheckpointRejectsCommitmentEvidenceOutsideAnchoredRun(t *testing.T) {
+	s, err := Open(t.TempDir() + "/test.db")
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer s.Close()
+	ctx := context.Background()
+	mission, _ := s.StartMission(ctx, continuity.MissionInput{Agent: "builder", Objective: "Keep commitments honest"})
+	anchoredRun, _ := s.Start(ctx, "builder", "codex", "gpt-test", nil)
+	otherRun, _ := s.Start(ctx, "builder", "codex", "gpt-test", nil)
+	foreignEvent, _ := s.Append(ctx, otherRun.ID, proof.EventInput{Kind: "tool.result", Source: proof.Source{Adapter: "test", Mode: "observed"}})
+	_, err = s.CreateCheckpoint(ctx, mission.ID, anchoredRun.ID, continuity.CheckpointInput{
+		Summary: "Claim unsupported completion",
+		Commitments: []continuity.Commitment{{
+			ID: "context", Description: "Build context", Status: "completed", Evidence: []continuity.EvidenceRef{{EventID: foreignEvent.ID}},
+		}},
+	})
+	if err == nil || !strings.Contains(err.Error(), "outside anchored run prefix") {
+		t.Fatalf("foreign commitment evidence was accepted: %v", err)
+	}
+}
+
+func TestCreateCheckpointRejectsCommitmentMutationAndRegression(t *testing.T) {
+	s, err := Open(t.TempDir() + "/test.db")
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer s.Close()
+	ctx := context.Background()
+	mission, _ := s.StartMission(ctx, continuity.MissionInput{Agent: "builder", Objective: "Keep commitments stable"})
+	run, _ := s.Start(ctx, "builder", "codex", "gpt-test", nil)
+	first := continuity.Commitment{ID: "context", Description: "Build context", Status: "completed", AcceptanceCriteria: []string{"bounded output"}}
+	if _, err = s.CreateCheckpoint(ctx, mission.ID, run.ID, continuity.CheckpointInput{Summary: "Context built", Commitments: []continuity.Commitment{first}}); err != nil {
+		t.Fatal(err)
+	}
+
+	tests := []struct {
+		name       string
+		commitment continuity.Commitment
+		want       string
+	}{
+		{name: "description", commitment: continuity.Commitment{ID: "context", Description: "Build different context", Status: "completed", AcceptanceCriteria: []string{"bounded output"}}, want: "definition changed"},
+		{name: "criteria", commitment: continuity.Commitment{ID: "context", Description: "Build context", Status: "completed", AcceptanceCriteria: []string{"different"}}, want: "definition changed"},
+		{name: "regression", commitment: continuity.Commitment{ID: "context", Description: "Build context", Status: "pending", AcceptanceCriteria: []string{"bounded output"}}, want: "cannot regress"},
+	}
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			_, checkpointErr := s.CreateCheckpoint(ctx, mission.ID, run.ID, continuity.CheckpointInput{Summary: "Next checkpoint", Commitments: []continuity.Commitment{tt.commitment}})
+			if checkpointErr == nil || !strings.Contains(checkpointErr.Error(), tt.want) {
+				t.Fatalf("got %v, want error containing %q", checkpointErr, tt.want)
+			}
+		})
+	}
+}
+
+func TestCreateCheckpointRequiresPriorCommitmentsInNextSnapshot(t *testing.T) {
+	s, err := Open(t.TempDir() + "/test.db")
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer s.Close()
+	ctx := context.Background()
+	mission, _ := s.StartMission(ctx, continuity.MissionInput{Agent: "builder", Objective: "Keep commitments visible"})
+	run, _ := s.Start(ctx, "builder", "codex", "gpt-test", nil)
+	commitment := continuity.Commitment{ID: "context", Description: "Build context", Status: "pending"}
+	if _, err = s.CreateCheckpoint(ctx, mission.ID, run.ID, continuity.CheckpointInput{Summary: "Committed", Commitments: []continuity.Commitment{commitment}}); err != nil {
+		t.Fatal(err)
+	}
+	if _, err = s.CreateCheckpoint(ctx, mission.ID, run.ID, continuity.CheckpointInput{Summary: "Commitment omitted"}); err == nil || !strings.Contains(err.Error(), "missing from checkpoint") {
+		t.Fatalf("prior commitment disappeared: %v", err)
+	}
+}
+
 func TestCompleteMissionRequiresValidCheckpointChain(t *testing.T) {
 	s, err := Open(t.TempDir() + "/test.db")
 	if err != nil {
@@ -118,5 +191,60 @@ func TestMissionBundleContainsPortableAnchoredRunProof(t *testing.T) {
 	}
 	if verification := continuity.VerifyBundle(bundle); !verification.Valid {
 		t.Fatalf("portable mission bundle failed verification: %+v", verification)
+	}
+}
+
+func TestBuildMissionContextReturnsVerifiedBoundedEvidence(t *testing.T) {
+	s, err := Open(t.TempDir() + "/test.db")
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer s.Close()
+	ctx := context.Background()
+	mission, _ := s.StartMission(ctx, continuity.MissionInput{Agent: "builder", Objective: "Compile trustworthy context"})
+	run, _ := s.Start(ctx, "builder", "codex", "gpt-test", nil)
+	first, _ := s.Append(ctx, run.ID, proof.EventInput{Kind: "decision", Source: proof.Source{Adapter: "test", Mode: "reported"}, Payload: map[string]any{"choice": "local-first"}})
+	second, _ := s.Append(ctx, run.ID, proof.EventInput{Kind: "tool.result", Source: proof.Source{Adapter: "test", Mode: "observed"}, Payload: map[string]any{"status": "passed"}})
+	checkpoint, err := s.CreateCheckpoint(ctx, mission.ID, run.ID, continuity.CheckpointInput{
+		Summary:  "Architecture selected",
+		Evidence: []continuity.EvidenceRef{{EventID: first.ID}},
+		Commitments: []continuity.Commitment{{
+			ID: "compiler", Description: "Build context compiler", Status: "completed",
+			Evidence: []continuity.EvidenceRef{{EventID: first.ID}, {EventID: second.ID}},
+		}},
+	})
+	if err != nil {
+		t.Fatal(err)
+	}
+	compiled, err := s.BuildMissionContext(ctx, mission.ID, 1)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if compiled.SchemaVersion != "1" || compiled.Source.Mode != "derived" || compiled.Source.Adapter != "context-compiler" {
+		t.Fatalf("context provenance missing: %+v", compiled)
+	}
+	if !compiled.Verification.Valid || compiled.Checkpoint == nil || compiled.Checkpoint.ID != checkpoint.ID {
+		t.Fatalf("context not bound to verified checkpoint: %+v", compiled)
+	}
+	if len(compiled.Evidence) != 1 || compiled.Evidence[0].ID != first.ID || !compiled.EvidenceTruncated {
+		t.Fatalf("evidence was not ordered, deduplicated, and bounded: %+v", compiled.Evidence)
+	}
+}
+
+func TestBuildMissionContextRefusesInvalidContinuity(t *testing.T) {
+	s, err := Open(t.TempDir() + "/test.db")
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer s.Close()
+	ctx := context.Background()
+	mission, _ := s.StartMission(ctx, continuity.MissionInput{Agent: "builder", Objective: "Reject corrupt context"})
+	run, _ := s.Start(ctx, "builder", "codex", "gpt-test", nil)
+	s.CreateCheckpoint(ctx, mission.ID, run.ID, continuity.CheckpointInput{Summary: "Checkpoint created"})
+	if _, err = s.db.ExecContext(ctx, `UPDATE checkpoints SET checkpoint_hash=? WHERE mission_id=?`, strings.Repeat("f", 64), mission.ID); err != nil {
+		t.Fatal(err)
+	}
+	if _, err = s.BuildMissionContext(ctx, mission.ID, 10); err == nil || !strings.Contains(err.Error(), "continuity verification failed") {
+		t.Fatalf("invalid continuity produced context: %v", err)
 	}
 }
