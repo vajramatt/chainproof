@@ -27,6 +27,9 @@ formats, and release artifacts.
   successful mission and run-anchor verification.
 - Surface post-checkpoint run tails as uncheckpointed recovery metadata; never
   promote them into trusted resumable evidence automatically.
+- Keep Agent Work Protocol environment variables harness-neutral. Context files
+  must be private, ephemeral, verified before child start, and treated as data
+  rather than generic prompt text.
 - Describe proof boundaries precisely: a valid hash chain proves that recorded
   evidence has not changed; it does not prove that a reported or imported claim
   was true.

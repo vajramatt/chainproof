@@ -386,6 +386,7 @@ func run(args []string) error {
 		}
 		agent := filepath.Base(command[0])
 		metadata := map[string]any{"command": command}
+		contextFile := ""
 		if *missionID != "" {
 			mission, missionErr := db.Mission(ctx, *missionID)
 			if missionErr != nil {
@@ -396,6 +397,15 @@ func run(args []string) error {
 			}
 			agent = mission.Agent
 			metadata["mission_id"] = mission.ID
+			compiled, contextErr := db.BuildMissionContext(ctx, mission.ID, 20)
+			if contextErr != nil {
+				return contextErr
+			}
+			contextFile, contextErr = writeAgentContextFile(compiled)
+			if contextErr != nil {
+				return contextErr
+			}
+			defer os.Remove(contextFile)
 		}
 		r, e := db.Start(ctx, agent, filepath.Base(command[0]), "", metadata)
 		if e != nil {
@@ -403,6 +413,7 @@ func run(args []string) error {
 		}
 		db.Append(ctx, r.ID, proof.EventInput{Kind: "run.started", Source: proof.Source{Adapter: "command-wrapper", Mode: "observed"}, Payload: map[string]any{"command": command}})
 		cmd := exec.Command(command[0], command[1:]...)
+		cmd.Env = append(os.Environ(), "CHAINPROOF_RUN_ID="+r.ID, "CHAINPROOF_MISSION_ID="+*missionID, "CHAINPROOF_CONTEXT_FILE="+contextFile)
 		cmd.Stdin = os.Stdin
 		cmd.Stdout = os.Stdout
 		cmd.Stderr = os.Stderr
@@ -424,6 +435,29 @@ func run(args []string) error {
 	default:
 		return fmt.Errorf("unknown command %q", args[0])
 	}
+}
+
+func writeAgentContextFile(compiled continuity.MissionContext) (string, error) {
+	raw, err := json.Marshal(compiled)
+	if err != nil {
+		return "", err
+	}
+	file, err := os.CreateTemp("", "chainproof-context-*.json")
+	if err != nil {
+		return "", err
+	}
+	path := file.Name()
+	if err = file.Chmod(0600); err == nil {
+		_, err = file.Write(append(raw, '\n'))
+	}
+	if closeErr := file.Close(); err == nil {
+		err = closeErr
+	}
+	if err != nil {
+		os.Remove(path)
+		return "", err
+	}
+	return path, nil
 }
 
 func newCodexCollector(db *store.Store) (*codexadapter.Collector, error) {

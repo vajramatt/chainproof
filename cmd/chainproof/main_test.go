@@ -2,6 +2,7 @@ package main
 
 import (
 	"encoding/json"
+	"errors"
 	"io"
 	"os"
 	"path/filepath"
@@ -191,6 +192,58 @@ func TestWrappedCommandJoinsMission(t *testing.T) {
 	if len(runs) != 1 || runs[0].Agent != "durable-agent" || runs[0].Metadata["mission_id"] != mission.ID {
 		t.Fatalf("wrapped run not joined to mission: %+v", runs)
 	}
+}
+
+func TestWrappedCommandProvidesEphemeralAgentContext(t *testing.T) {
+	t.Setenv("CHAINPROOF_DB", filepath.Join(t.TempDir(), "chainproof.db"))
+	t.Setenv("CHAINPROOF_CODEX_DISABLED", "1")
+	missionJSON := captureStdout(t, func() error {
+		return run([]string{"mission", "start", "--agent", "durable-agent", "--objective", "Carry context into harness"})
+	})
+	var mission continuity.Mission
+	if err := json.Unmarshal([]byte(missionJSON), &mission); err != nil {
+		t.Fatal(err)
+	}
+	t.Setenv("CHAINPROOF_WRAPPER_HELPER", "1")
+	childJSON := captureStdout(t, func() error {
+		return run([]string{"run", "--mission", mission.ID, "--", os.Args[0], "-test.run=TestWrappedCommandEnvironmentHelper"})
+	})
+	var child struct {
+		MissionID      string `json:"mission_id"`
+		RunID          string `json:"run_id"`
+		ContextFile    string `json:"context_file"`
+		ContextMission string `json:"context_mission"`
+	}
+	if err := json.Unmarshal([]byte(childJSON), &child); err != nil {
+		t.Fatal(err)
+	}
+	if child.MissionID != mission.ID || child.RunID == "" || child.ContextFile == "" || child.ContextMission != mission.ID {
+		t.Fatalf("wrapper did not provide agent work context: %+v", child)
+	}
+	if _, err := os.Stat(child.ContextFile); !errors.Is(err, os.ErrNotExist) {
+		t.Fatalf("ephemeral context file remained after command: %v", err)
+	}
+}
+
+func TestWrappedCommandEnvironmentHelper(t *testing.T) {
+	if os.Getenv("CHAINPROOF_WRAPPER_HELPER") != "1" {
+		return
+	}
+	contextPath := os.Getenv("CHAINPROOF_CONTEXT_FILE")
+	contextMission := ""
+	if raw, err := os.ReadFile(contextPath); err == nil {
+		var compiled continuity.MissionContext
+		if json.Unmarshal(raw, &compiled) == nil {
+			contextMission = compiled.Mission.ID
+		}
+	}
+	if err := json.NewEncoder(os.Stdout).Encode(map[string]string{
+		"mission_id": os.Getenv("CHAINPROOF_MISSION_ID"), "run_id": os.Getenv("CHAINPROOF_RUN_ID"),
+		"context_file": contextPath, "context_mission": contextMission,
+	}); err != nil {
+		os.Exit(2)
+	}
+	os.Exit(0)
 }
 
 func captureStdout(t *testing.T, action func() error) string {
