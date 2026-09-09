@@ -33,6 +33,7 @@ work it does best.
 
 ### Web: investigation and depth
 
+- inspect durable missions, checkpoint integrity, and commitment state
 - reconstruct an entire run
 - relate inputs, outputs, actions, results, and file changes
 - inspect long payloads, artifacts, and diffs
@@ -141,6 +142,18 @@ evidence in one click without making everyone read it by default.
 - never imply that opening the browser publishes a run
 
 ## Information architecture
+
+### 0. Missions
+
+Mission continuity is the bridge between bounded runs. The local mission view
+shows active and completed objectives, current checkpoint-chain head, latest
+reported state, stable commitments, next actions, and cited canonical events.
+Invalid continuity must block the derived detail view rather than showing
+unverified state as resumable context.
+
+Mission evidence links open the existing event inspector. This keeps human
+review aligned with `chainproof context`: both surfaces derive from the same
+verified checkpoint and preserve the same proof boundary.
 
 ### 1. Runs
 

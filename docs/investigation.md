@@ -1,10 +1,13 @@
 # Investigating provenance
 
-ChainProof stores two related representations in the same local SQLite file:
+ChainProof stores three related representations in the same local SQLite file:
 
 1. **Canonical ledger events** are append-only, hash-chained, exportable, and
    independently verifiable.
-2. **The provenance index** is a derived projection used for search and facets.
+2. **Mission checkpoints** form a separate append-only continuity chain. Each
+   checkpoint anchors an exact prefix of one canonical run proof and carries
+   resumable agent state.
+3. **The provenance index** is a derived projection used for search and facets.
    It is not evidence and is automatically backfilled from ledger events.
 
 This distinction lets the interface be fast without pretending that a search

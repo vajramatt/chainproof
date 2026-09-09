@@ -19,6 +19,7 @@ import (
 	"time"
 
 	codexadapter "github.com/vajramatt/chainproof/internal/adapters/codex"
+	"github.com/vajramatt/chainproof/internal/continuity"
 	"github.com/vajramatt/chainproof/internal/proof"
 	"github.com/vajramatt/chainproof/internal/server"
 	"github.com/vajramatt/chainproof/internal/service"
@@ -65,6 +66,25 @@ func run(args []string) error {
 		}
 		return nil
 	}
+	if args[0] == "verify-continuity-file" {
+		if len(args) < 2 {
+			return errors.New("usage: chainproof verify-continuity-file PROOF.json")
+		}
+		raw, err := os.ReadFile(args[1])
+		if err != nil {
+			return err
+		}
+		var bundle continuity.Bundle
+		if err = json.Unmarshal(raw, &bundle); err != nil {
+			return err
+		}
+		verification := continuity.VerifyBundle(bundle)
+		_ = output(verification, nil)
+		if !verification.Valid {
+			return errors.New("continuity verification failed")
+		}
+		return nil
+	}
 	if args[0] == "service" {
 		return manageService(args[1:])
 	}
@@ -89,15 +109,86 @@ func run(args []string) error {
 	case "init":
 		fmt.Println("initialized", dbPath)
 		return nil
+	case "mission":
+		if len(args) < 2 {
+			return errors.New("usage: chainproof mission start|list|complete|export")
+		}
+		switch args[1] {
+		case "start":
+			fs := flag.NewFlagSet("mission start", flag.ContinueOnError)
+			agent := fs.String("agent", "unknown-agent", "")
+			objective := fs.String("objective", "", "")
+			if e = fs.Parse(args[2:]); e != nil {
+				return e
+			}
+			mission, startErr := db.StartMission(ctx, continuity.MissionInput{Agent: *agent, Objective: *objective})
+			return output(mission, startErr)
+		case "complete":
+			if len(args) < 3 {
+				return errors.New("usage: chainproof mission complete MISSION_ID")
+			}
+			mission, completeErr := db.CompleteMission(ctx, args[2])
+			return output(mission, completeErr)
+		case "list":
+			fs := flag.NewFlagSet("mission list", flag.ContinueOnError)
+			status := fs.String("status", "", "")
+			limit := fs.Int("limit", 100, "")
+			if e = fs.Parse(args[2:]); e != nil {
+				return e
+			}
+			missions, listErr := db.Missions(ctx, *status, *limit)
+			return output(missions, listErr)
+		case "export":
+			if len(args) < 3 {
+				return errors.New("usage: chainproof mission export MISSION_ID [PROOF.json]")
+			}
+			bundle, bundleErr := db.MissionBundle(ctx, args[2])
+			if bundleErr != nil {
+				return bundleErr
+			}
+			if len(args) < 4 {
+				return output(bundle, nil)
+			}
+			raw, marshalErr := json.MarshalIndent(bundle, "", "  ")
+			if marshalErr != nil {
+				return marshalErr
+			}
+			if writeErr := os.WriteFile(args[3], append(raw, '\n'), 0600); writeErr != nil {
+				return writeErr
+			}
+			fmt.Println(args[3])
+			return nil
+		default:
+			return errors.New("usage: chainproof mission start|list|complete|export")
+		}
 	case "start":
 		fs := flag.NewFlagSet("start", flag.ContinueOnError)
-		agent := fs.String("agent", "unknown-agent", "")
+		agent := fs.String("agent", "", "")
 		harness := fs.String("harness", "", "")
 		model := fs.String("model", "", "")
+		missionID := fs.String("mission", "", "")
 		if e = fs.Parse(args[1:]); e != nil {
 			return e
 		}
-		r, e := db.Start(ctx, *agent, *harness, *model, nil)
+		metadata := map[string]any{}
+		selectedAgent := strings.TrimSpace(*agent)
+		if *missionID != "" {
+			mission, missionErr := db.Mission(ctx, *missionID)
+			if missionErr != nil {
+				return missionErr
+			}
+			if selectedAgent == "" {
+				selectedAgent = mission.Agent
+			}
+			if mission.Status != "active" {
+				return fmt.Errorf("mission is %s", mission.Status)
+			}
+			metadata["mission_id"] = *missionID
+		}
+		if selectedAgent == "" {
+			selectedAgent = "unknown-agent"
+		}
+		r, e := db.Start(ctx, selectedAgent, *harness, *model, metadata)
 		return output(r, e)
 	case "append":
 		if len(args) < 2 {
@@ -191,6 +282,50 @@ func run(args []string) error {
 		}
 		v, e := db.Search(ctx, store.SearchQuery{Text: query, Limit: 100})
 		return output(v, e)
+	case "checkpoint":
+		if len(args) < 3 {
+			return errors.New("usage: chainproof checkpoint MISSION_ID RUN_ID [JSON]")
+		}
+		var input continuity.CheckpointInput
+		raw := strings.Join(args[3:], " ")
+		if raw == "" {
+			body, _ := io.ReadAll(os.Stdin)
+			raw = string(body)
+		}
+		if e = json.Unmarshal([]byte(raw), &input); e != nil {
+			return e
+		}
+		checkpoint, checkpointErr := db.CreateCheckpoint(ctx, args[1], args[2], input)
+		return output(checkpoint, checkpointErr)
+	case "resume":
+		missionID := ""
+		if len(args) > 1 {
+			missionID = args[1]
+		} else {
+			mission, missionErr := db.ActiveMission(ctx)
+			if missionErr != nil {
+				return missionErr
+			}
+			missionID = mission.ID
+		}
+		resume, resumeErr := db.ResumeMission(ctx, missionID)
+		return output(resume, resumeErr)
+	case "context":
+		fs := flag.NewFlagSet("context", flag.ContinueOnError)
+		missionID := fs.String("mission", "", "")
+		maxEvidence := fs.Int("max-evidence", 20, "")
+		if e = fs.Parse(args[1:]); e != nil {
+			return e
+		}
+		if *missionID == "" {
+			mission, missionErr := db.ActiveMission(ctx)
+			if missionErr != nil {
+				return missionErr
+			}
+			*missionID = mission.ID
+		}
+		compiled, contextErr := db.BuildMissionContext(ctx, *missionID, *maxEvidence)
+		return output(compiled, contextErr)
 	case "ui":
 		watchCtx, cancel := context.WithCancel(ctx)
 		defer cancel()
@@ -238,16 +373,31 @@ func run(args []string) error {
 		}
 	case "run":
 		if len(args) < 2 {
-			return errors.New("usage: chainproof run -- COMMAND [ARGS...]")
+			return errors.New("usage: chainproof run [--mission ID] -- COMMAND [ARGS...]")
 		}
-		command := args[1:]
-		if command[0] == "--" {
-			command = command[1:]
+		fs := flag.NewFlagSet("run", flag.ContinueOnError)
+		missionID := fs.String("mission", "", "")
+		if e = fs.Parse(args[1:]); e != nil {
+			return e
 		}
+		command := fs.Args()
 		if len(command) == 0 {
-			return errors.New("usage: chainproof run -- COMMAND [ARGS...]")
+			return errors.New("usage: chainproof run [--mission ID] -- COMMAND [ARGS...]")
 		}
-		r, e := db.Start(ctx, filepath.Base(command[0]), filepath.Base(command[0]), "", map[string]any{"command": command})
+		agent := filepath.Base(command[0])
+		metadata := map[string]any{"command": command}
+		if *missionID != "" {
+			mission, missionErr := db.Mission(ctx, *missionID)
+			if missionErr != nil {
+				return missionErr
+			}
+			if mission.Status != "active" {
+				return fmt.Errorf("mission is %s", mission.Status)
+			}
+			agent = mission.Agent
+			metadata["mission_id"] = mission.ID
+		}
+		r, e := db.Start(ctx, agent, filepath.Base(command[0]), "", metadata)
 		if e != nil {
 			return e
 		}
@@ -367,7 +517,7 @@ func manageService(args []string) error {
 	}
 }
 
-const usage = `ChainProof — local provenance for any AI agent
+const usage = `ChainProof — durable continuity and provenance for AI agents
 
 Usage:
   chainproof ui                              Open the terminal interface
@@ -375,17 +525,30 @@ Usage:
   chainproof daemon                         Run collector/API in foreground
   chainproof service install                Install and start the user service
   chainproof service status                 Inspect the user service
-  chainproof start [--agent A --harness H --model M]
+  chainproof mission start --agent A --objective O
+                                              Start durable work across sessions
+  chainproof mission list [--status active|completed] [--limit N]
+                                              Discover durable missions
+  chainproof mission complete MISSION_ID      Close after a valid checkpoint
+  chainproof mission export MISSION_ID [FILE] Export portable continuity proof
+  chainproof start [--agent A --harness H --model M --mission ID]
   chainproof append RUN_ID [JSON]            Append one reported event
   chainproof ingest RUN_ID < events.jsonl    Import a JSONL stream
   chainproof pull RUN_ID FILE [ADAPTER]      Pull new JSONL records by cursor
-  chainproof run -- COMMAND [ARGS...]        Wrap any agent harness
+  chainproof run [--mission ID] -- COMMAND   Wrap harness inside mission
   chainproof complete RUN_ID [STATUS]
   chainproof verify RUN_ID                   Verify the local ledger
   chainproof export RUN_ID [PROOF.json]      Export a portable proof
   chainproof verify-file PROOF.json          Verify without a database
+  chainproof verify-continuity-file PROOF.json
+                                              Verify mission proof offline
   chainproof list
-	chainproof search QUERY                    Search local provenance evidence
+  chainproof search QUERY                    Search local provenance evidence
+  chainproof checkpoint MISSION_ID RUN_ID [JSON]
+                                              Anchor resumable state to run proof
+  chainproof resume [MISSION_ID]             Verify and load latest checkpoint
+  chainproof context [--mission ID] [--max-evidence N]
+                                              Compile bounded verified agent context
   chainproof codex sync                     Discover/import Codex sessions once
   chainproof codex watch                    Continuously follow Codex sessions
   chainproof version
