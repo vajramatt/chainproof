@@ -3,12 +3,14 @@ package codex
 import (
 	"context"
 	"encoding/json"
+	"fmt"
 	"os"
 	"path/filepath"
 	"strings"
 	"testing"
 	"time"
 
+	"github.com/vajramatt/chainproof/internal/continuity"
 	"github.com/vajramatt/chainproof/internal/store"
 )
 
@@ -16,6 +18,7 @@ const sessionMeta = `{"timestamp":"2026-08-16T14:00:00Z","type":"session_meta","
 const turnContext = `{"timestamp":"2026-08-16T14:00:01Z","type":"turn_context","ordinal":1,"payload":{"turn_id":"turn-1","cwd":"/work/chainproof","model":"gpt-test","approval_policy":"on-request"}}`
 const userItem = `{"timestamp":"2026-08-16T14:00:02Z","type":"event_msg","ordinal":2,"payload":{"type":"item_completed","turn_id":"turn-1","item":{"id":"item-1","type":"UserMessage","content":[{"type":"text","text":"secret prompt"}]}}}`
 const commandItem = `{"timestamp":"2026-08-16T14:00:03Z","type":"event_msg","ordinal":3,"payload":{"type":"item_completed","turn_id":"turn-1","item":{"id":"item-2","type":"CommandExecution","command":"git status","cwd":"/work/chainproof","status":"completed","exit_code":0,"stdout":"clean","stderr":""}}}`
+const missionUserItem = `{"timestamp":"2026-08-16T14:00:02Z","type":"event_msg","ordinal":2,"payload":{"type":"item_completed","turn_id":"turn-1","item":{"id":"item-mission","type":"UserMessage","content":[{"type":"text","text":"CHAINPROOF_AGENT_WORK_V1 {\"mission_id\":\"%s\",\"parent_run_id\":\"%s\"}\nRead context."}]}}}`
 
 func TestSyncDiscoversNormalizesAndCursors(t *testing.T) {
 	root := t.TempDir()
@@ -119,6 +122,85 @@ func TestMalformedSessionDoesNotBlockOtherSources(t *testing.T) {
 	}
 	if stats.Errors != 1 || stats.EventsImported != 1 {
 		t.Fatalf("healthy source was blocked: %+v", stats)
+	}
+}
+
+func TestSyncLinksNativeCodexSessionToMissionEnvelope(t *testing.T) {
+	root := t.TempDir()
+	source := filepath.Join(root, "mission.jsonl")
+	db, err := store.Open(filepath.Join(t.TempDir(), "chainproof.db"))
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer db.Close()
+	ctx := context.Background()
+	mission, err := db.StartMission(ctx, continuity.MissionInput{Agent: "builder", Objective: "Continue safely"})
+	if err != nil {
+		t.Fatal(err)
+	}
+	parent, err := db.Start(ctx, "builder", "codex", "", map[string]any{"mission_id": mission.ID})
+	if err != nil {
+		t.Fatal(err)
+	}
+	if err = os.WriteFile(source, []byte(sessionMeta+"\n"+fmt.Sprintf(missionUserItem, mission.ID, parent.ID)+"\n"), 0600); err != nil {
+		t.Fatal(err)
+	}
+	collector, err := New(db, Options{Root: root, Content: "hashes"})
+	if err != nil {
+		t.Fatal(err)
+	}
+	if _, err = collector.Sync(ctx); err != nil {
+		t.Fatal(err)
+	}
+	run, found, err := db.SourceRun(ctx, AdapterName, source)
+	if err != nil || !found {
+		t.Fatalf("source run missing: %v", err)
+	}
+	if run.Metadata["mission_id"] != mission.ID || run.Metadata["parent_run_id"] != parent.ID || run.Metadata["agent_work_protocol"] != "chainproof.agent-work.v1" {
+		t.Fatalf("native Codex run not linked to mission envelope: %+v", run.Metadata)
+	}
+	events, err := db.Events(ctx, run.ID)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if len(events) != 2 || events[1].Kind != "human.input" || events[1].Source.Mode != "imported" {
+		t.Fatalf("protocol linkage changed imported evidence: %+v", events)
+	}
+}
+
+func TestSyncRejectsForgedMissionEnvelopeLink(t *testing.T) {
+	root := t.TempDir()
+	source := filepath.Join(root, "forged.jsonl")
+	db, err := store.Open(filepath.Join(t.TempDir(), "chainproof.db"))
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer db.Close()
+	ctx := context.Background()
+	mission, err := db.StartMission(ctx, continuity.MissionInput{Agent: "builder", Objective: "Protected mission"})
+	if err != nil {
+		t.Fatal(err)
+	}
+	unrelated, err := db.Start(ctx, "other", "codex", "", map[string]any{"mission_id": "different-mission"})
+	if err != nil {
+		t.Fatal(err)
+	}
+	if err = os.WriteFile(source, []byte(sessionMeta+"\n"+fmt.Sprintf(missionUserItem, mission.ID, unrelated.ID)+"\n"), 0600); err != nil {
+		t.Fatal(err)
+	}
+	collector, err := New(db, Options{Root: root, Content: "hashes"})
+	if err != nil {
+		t.Fatal(err)
+	}
+	if _, err = collector.Sync(ctx); err != nil {
+		t.Fatal(err)
+	}
+	run, found, err := db.SourceRun(ctx, AdapterName, source)
+	if err != nil || !found {
+		t.Fatalf("source run missing: %v", err)
+	}
+	if _, linked := run.Metadata["mission_id"]; linked {
+		t.Fatalf("forged protocol marker linked native run: %+v", run.Metadata)
 	}
 }
 

@@ -42,6 +42,39 @@ Context is data, not an automatically injected prompt. This prevents a generic
 wrapper from guessing harness syntax, preserves exact JSON proof boundaries,
 and lets each integration decide how to place context in its model input.
 
+## Native Codex profile
+
+```sh
+chainproof codex work [--mission MISSION_ID] [--exec] [--prompt TEXT] -- [CODEX_OPTIONS]
+```
+
+This profile uses the generic child environment and injects a first-line
+linkage marker into Codex's initial prompt:
+
+```text
+CHAINPROOF_AGENT_WORK_V1 {"mission_id":"MISSION_ID","parent_run_id":"RUN_ID"}
+```
+
+`parent_run_id` identifies the observed wrapper run. The Codex collector may
+attach its imported native-session run to the mission only after confirming
+that the parent exists, uses harness `codex`, and has the same `mission_id`.
+Marker text alone is insufficient to create a linkage.
+
+```text
+ChainProof wrapper              Codex                    Codex collector
+      |                           |                            |
+      |-- verified context env -->|                            |
+      |-- protocol prompt ------->|                            |
+      |<-- observed exit ----------|                            |
+      |                                                        |
+      |                 local session JSONL ------------------>|
+      |<======== parent_run_id + mission_id validated =========|
+```
+
+Wrapper run proves observed process lifecycle. Collector run proves continuity
+of imported Codex records. Linkage preserves both provenance modes; it does not
+merge events, deduplicate claims, or make imported evidence observed.
+
 ## Recovery rule
 
 When `has_uncheckpointed_work` is true, the latest checkpoint remains the

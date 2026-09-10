@@ -37,6 +37,17 @@ Or wrap an agent process:
 chainproof run --mission MISSION_ID -- codex
 ```
 
+For native Codex continuity, use:
+
+```sh
+chainproof codex work --mission MISSION_ID
+chainproof codex work --mission MISSION_ID --exec --prompt "Continue pending work" -- --model MODEL
+```
+
+This adds verified-context and checkpoint instructions to Codex's initial
+prompt. Options after `--` pass through to Codex. Omitting `--mission` selects
+the most recently updated active mission.
+
 Wrapped processes receive `CHAINPROOF_MISSION_ID`, `CHAINPROOF_RUN_ID`, and
 `CHAINPROOF_CONTEXT_FILE`. The context path points to a mode-`0600` JSON file
 containing verified bounded mission context. ChainProof removes it when the
@@ -50,6 +61,13 @@ v1](../spec/agent-work-v1.md).
 The mission's agent name is inherited unless `--agent` explicitly overrides
 it. Run metadata records `mission_id`; provenance events keep their existing v1
 shape and proof semantics.
+
+Native Codex work produces two linked records with different proof boundaries:
+an `observed` execution-envelope run from the ChainProof wrapper and an
+`imported` native-session run from Codex's local JSONL. The collector only
+accepts the linkage marker when its parent run exists, uses the Codex harness,
+and belongs to the same mission. Neither record upgrades imported claims to
+observed evidence.
 
 ## Create a checkpoint
 
