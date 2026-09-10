@@ -312,6 +312,42 @@ func TestMissionLeaseCLIClaimsHandsOffAndReleases(t *testing.T) {
 	captureStdout(t, func() error { return run([]string{"mission", "release", mission.ID, next.LeaseID}) })
 }
 
+func TestMissionAcquireCLIClaimsAvailableWorkAndReturnsContext(t *testing.T) {
+	t.Setenv("CHAINPROOF_DB", filepath.Join(t.TempDir(), "chainproof.db"))
+	t.Setenv("CHAINPROOF_CODEX_DISABLED", "1")
+	claimedJSON := captureStdout(t, func() error {
+		return run([]string{"mission", "start", "--agent", "builder", "--objective", "Claimed work"})
+	})
+	var claimed continuity.Mission
+	if err := json.Unmarshal([]byte(claimedJSON), &claimed); err != nil {
+		t.Fatal(err)
+	}
+	availableJSON := captureStdout(t, func() error {
+		return run([]string{"mission", "start", "--agent", "builder", "--objective", "Available work"})
+	})
+	var available continuity.Mission
+	if err := json.Unmarshal([]byte(availableJSON), &available); err != nil {
+		t.Fatal(err)
+	}
+	captureStdout(t, func() error {
+		return run([]string{"mission", "claim", claimed.ID, "--holder", "other-worker"})
+	})
+
+	acquiredJSON := captureStdout(t, func() error {
+		return run([]string{"mission", "acquire", "--holder", "worker-a", "--ttl", "10m", "--max-evidence", "7"})
+	})
+	var acquired continuity.MissionAcquisition
+	if err := json.Unmarshal([]byte(acquiredJSON), &acquired); err != nil {
+		t.Fatal(err)
+	}
+	if acquired.Mission.ID != available.ID || acquired.Lease.Holder != "worker-a" || acquired.Context.Mission.ID != available.ID || !acquired.Context.Verification.Valid || !acquired.Context.LeaseActive {
+		t.Fatalf("unexpected mission acquisition: %+v", acquired)
+	}
+	if err := run([]string{"mission", "acquire", "--holder", "worker-b"}); err == nil || !strings.Contains(err.Error(), "no available mission") {
+		t.Fatalf("competing acquisition succeeded: %v", err)
+	}
+}
+
 func TestStartRunInheritsMissionAgent(t *testing.T) {
 	t.Setenv("CHAINPROOF_DB", filepath.Join(t.TempDir(), "chainproof.db"))
 	t.Setenv("CHAINPROOF_CODEX_DISABLED", "1")
@@ -468,6 +504,38 @@ func TestCodexWorkStartsMissionAwareCodex(t *testing.T) {
 	}
 	if wrapped.Metadata["lease_id"] != child.LeaseID || wrapped.Metadata["lease_holder"] != "codex-worker" {
 		t.Fatalf("Codex run omitted lease binding: %+v", wrapped.Metadata)
+	}
+}
+
+func TestCodexWorkAtomicallyAcquiresAvailableMission(t *testing.T) {
+	t.Setenv("CHAINPROOF_DB", filepath.Join(t.TempDir(), "chainproof.db"))
+	t.Setenv("CHAINPROOF_CODEX_DISABLED", "1")
+	t.Setenv("CHAINPROOF_CODEX_BIN", os.Args[0])
+	t.Setenv("CHAINPROOF_CODEX_WORK_HELPER", "1")
+	missionJSON := captureStdout(t, func() error {
+		return run([]string{"mission", "start", "--agent", "builder", "--objective", "Acquire and continue"})
+	})
+	var mission continuity.Mission
+	if err := json.Unmarshal([]byte(missionJSON), &mission); err != nil {
+		t.Fatal(err)
+	}
+
+	childJSON := captureStdout(t, func() error {
+		return run([]string{"codex", "work", "--acquire", "--holder", "queue-worker", "--lease-ttl", "1h", "--", "-test.run=TestCodexWorkEnvironmentHelper"})
+	})
+	var child struct {
+		MissionID          string `json:"mission_id"`
+		LeaseID            string `json:"lease_id"`
+		ContextLeaseHolder string `json:"context_lease_holder"`
+	}
+	if err := json.Unmarshal([]byte(childJSON), &child); err != nil {
+		t.Fatal(err)
+	}
+	if child.MissionID != mission.ID || child.LeaseID == "" || child.ContextLeaseHolder != "queue-worker" {
+		t.Fatalf("Codex did not acquire queued mission: %+v", child)
+	}
+	if err := run([]string{"codex", "work", "--mission", mission.ID, "--acquire"}); err == nil || !strings.Contains(err.Error(), "cannot be combined") {
+		t.Fatalf("ambiguous mission selection accepted: %v", err)
 	}
 }
 

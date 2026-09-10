@@ -161,3 +161,73 @@ func TestMissionContextExposesCurrentCoordinationLease(t *testing.T) {
 		t.Fatalf("compiled context omitted active lease: %+v", compiled)
 	}
 }
+
+func TestAcquireMissionAtomicallySelectsAvailableWorkWithVerifiedContext(t *testing.T) {
+	s, err := Open(t.TempDir() + "/test.db")
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer s.Close()
+	ctx := context.Background()
+	claimed, _ := s.StartMission(ctx, continuity.MissionInput{Agent: "builder", Objective: "Already owned"})
+	available, _ := s.StartMission(ctx, continuity.MissionInput{Agent: "builder", Objective: "Available work"})
+	s.ClaimMission(ctx, claimed.ID, continuity.LeaseInput{Holder: "other-worker", TTL: 10 * time.Minute})
+
+	acquisition, err := s.AcquireMission(ctx, continuity.LeaseInput{Holder: "worker-a", TTL: 15 * time.Minute}, 12)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if acquisition.Mission.ID != available.ID || acquisition.Lease.MissionID != available.ID || acquisition.Lease.Holder != "worker-a" {
+		t.Fatalf("wrong mission acquired: %+v", acquisition)
+	}
+	if acquisition.Context.Mission.ID != available.ID || !acquisition.Context.Verification.Valid || !acquisition.Context.LeaseActive || acquisition.Context.Lease == nil || acquisition.Context.Lease.LeaseID != acquisition.Lease.LeaseID {
+		t.Fatalf("acquisition omitted verified owned context: %+v", acquisition.Context)
+	}
+	if _, err = s.AcquireMission(ctx, continuity.LeaseInput{Holder: "worker-b", TTL: 10 * time.Minute}, 20); err == nil || !strings.Contains(err.Error(), "no available mission") {
+		t.Fatalf("competing worker acquired claimed work: %v", err)
+	}
+}
+
+func TestAcquireMissionReclaimsExpiredLease(t *testing.T) {
+	s, err := Open(t.TempDir() + "/test.db")
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer s.Close()
+	now := time.Date(2026, 9, 9, 12, 0, 0, 0, time.UTC)
+	s.leaseNow = func() time.Time { return now }
+	ctx := context.Background()
+	mission, _ := s.StartMission(ctx, continuity.MissionInput{Agent: "builder", Objective: "Recover abandoned work"})
+	first, _ := s.ClaimMission(ctx, mission.ID, continuity.LeaseInput{Holder: "dead-worker", TTL: time.Minute})
+	now = now.Add(2 * time.Minute)
+
+	acquisition, err := s.AcquireMission(ctx, continuity.LeaseInput{Holder: "recovery-worker", TTL: 10 * time.Minute}, 20)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if acquisition.Mission.ID != mission.ID || acquisition.Lease.PreviousLeaseID != first.LeaseID || acquisition.Lease.Sequence != 1 {
+		t.Fatalf("expired mission not reclaimed: %+v", acquisition)
+	}
+}
+
+func TestAcquireMissionRefusesInvalidContinuity(t *testing.T) {
+	s, err := Open(t.TempDir() + "/test.db")
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer s.Close()
+	ctx := context.Background()
+	mission, _ := s.StartMission(ctx, continuity.MissionInput{Agent: "builder", Objective: "Reject corrupt queue entry"})
+	run, _ := s.Start(ctx, "builder", "codex", "gpt-test", map[string]any{"mission_id": mission.ID})
+	s.CreateCheckpoint(ctx, mission.ID, run.ID, continuity.CheckpointInput{Summary: "Trusted"})
+	if _, err = s.db.ExecContext(ctx, `UPDATE checkpoints SET checkpoint_hash=? WHERE mission_id=?`, strings.Repeat("f", 64), mission.ID); err != nil {
+		t.Fatal(err)
+	}
+
+	if _, err = s.AcquireMission(ctx, continuity.LeaseInput{Holder: "worker"}, 20); err == nil || !strings.Contains(err.Error(), "continuity verification failed") {
+		t.Fatalf("corrupt mission was acquired: %v", err)
+	}
+	if _, active, leaseErr := s.MissionLease(ctx, mission.ID); leaseErr != nil || active {
+		t.Fatalf("failed acquisition left active lease: active=%v err=%v", active, leaseErr)
+	}
+}

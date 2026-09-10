@@ -111,7 +111,7 @@ func run(args []string) error {
 		return nil
 	case "mission":
 		if len(args) < 2 {
-			return errors.New("usage: chainproof mission start|list|complete|export|claim|lease|renew|handoff|release")
+			return errors.New("usage: chainproof mission start|list|acquire|complete|export|claim|lease|renew|handoff|release")
 		}
 		switch args[1] {
 		case "start":
@@ -170,6 +170,16 @@ func run(args []string) error {
 			}
 			lease, claimErr := db.ClaimMission(ctx, args[2], continuity.LeaseInput{Holder: *holder, TTL: *ttl})
 			return output(lease, claimErr)
+		case "acquire":
+			fs := flag.NewFlagSet("mission acquire", flag.ContinueOnError)
+			holder := fs.String("holder", "", "")
+			ttl := fs.Duration("ttl", 30*time.Minute, "")
+			maxEvidence := fs.Int("max-evidence", 20, "")
+			if e = fs.Parse(args[2:]); e != nil {
+				return e
+			}
+			acquisition, acquireErr := db.AcquireMission(ctx, continuity.LeaseInput{Holder: *holder, TTL: *ttl}, *maxEvidence)
+			return output(acquisition, acquireErr)
 		case "lease":
 			if len(args) < 3 {
 				return errors.New("usage: chainproof mission lease MISSION_ID [--history]")
@@ -222,7 +232,7 @@ func run(args []string) error {
 			lease, releaseErr := db.ReleaseMission(ctx, args[2], args[3])
 			return output(lease, releaseErr)
 		default:
-			return errors.New("usage: chainproof mission start|list|complete|export|claim|lease|renew|handoff|release")
+			return errors.New("usage: chainproof mission start|list|acquire|complete|export|claim|lease|renew|handoff|release")
 		}
 	case "start":
 		fs := flag.NewFlagSet("start", flag.ContinueOnError)
@@ -536,6 +546,7 @@ type wrappedCommand struct {
 func runCodexWork(ctx context.Context, db *store.Store, args []string) error {
 	fs := flag.NewFlagSet("codex work", flag.ContinueOnError)
 	missionID := fs.String("mission", "", "")
+	acquire := fs.Bool("acquire", false, "")
 	execMode := fs.Bool("exec", false, "")
 	prompt := fs.String("prompt", "", "")
 	holder := fs.String("holder", "", "")
@@ -543,26 +554,46 @@ func runCodexWork(ctx context.Context, db *store.Store, args []string) error {
 	if err := fs.Parse(args); err != nil {
 		return err
 	}
-	if *missionID == "" {
-		mission, err := db.ActiveMission(ctx)
+	if *acquire && *missionID != "" {
+		return errors.New("--mission and --acquire cannot be combined")
+	}
+	var mission continuity.Mission
+	var lease continuity.MissionLease
+	var err error
+	if *acquire {
+		if strings.TrimSpace(*holder) == "" {
+			*holder = "codex"
+		}
+		acquisition, acquireErr := db.AcquireMission(ctx, continuity.LeaseInput{Holder: *holder, TTL: *leaseTTL}, 20)
+		if acquireErr != nil {
+			return acquireErr
+		}
+		mission = acquisition.Mission
+		lease = acquisition.Lease
+		*missionID = mission.ID
+	} else {
+		if *missionID == "" {
+			mission, err = db.ActiveMission(ctx)
+			if err != nil {
+				return err
+			}
+			*missionID = mission.ID
+		} else {
+			mission, err = db.Mission(ctx, *missionID)
+			if err != nil {
+				return err
+			}
+		}
+		if _, err = db.BuildMissionContext(ctx, mission.ID, 20); err != nil {
+			return err
+		}
+		if strings.TrimSpace(*holder) == "" {
+			*holder = mission.Agent
+		}
+		lease, err = db.ClaimMission(ctx, mission.ID, continuity.LeaseInput{Holder: *holder, TTL: *leaseTTL})
 		if err != nil {
 			return err
 		}
-		*missionID = mission.ID
-	}
-	mission, err := db.Mission(ctx, *missionID)
-	if err != nil {
-		return err
-	}
-	if _, err = db.BuildMissionContext(ctx, mission.ID, 20); err != nil {
-		return err
-	}
-	if strings.TrimSpace(*holder) == "" {
-		*holder = mission.Agent
-	}
-	lease, err := db.ClaimMission(ctx, mission.ID, continuity.LeaseInput{Holder: *holder, TTL: *leaseTTL})
-	if err != nil {
-		return err
 	}
 	bin := strings.TrimSpace(os.Getenv("CHAINPROOF_CODEX_BIN"))
 	if bin == "" {
@@ -834,6 +865,8 @@ Usage:
                                               Start durable work across sessions
   chainproof mission list [--status active|completed] [--limit N]
                                               Discover durable missions
+  chainproof mission acquire --holder H [--ttl 30m] [--max-evidence N]
+                                              Atomically claim available verified work
   chainproof mission complete MISSION_ID      Close after a valid checkpoint
   chainproof mission export MISSION_ID [FILE] Export portable continuity proof
   chainproof mission claim MISSION_ID --holder H [--ttl 30m]
@@ -870,7 +903,7 @@ Usage:
                                               Preserve prior state and reject tail
   chainproof codex sync                     Discover/import Codex sessions once
   chainproof codex watch                    Continuously follow Codex sessions
-  chainproof codex work [--mission ID] [--holder H] [--lease-ttl 30m]
+  chainproof codex work [--mission ID | --acquire] [--holder H] [--lease-ttl 30m]
                         [--exec] [--prompt TEXT] -- [CODEX_OPTIONS]
                                               Run Codex with verified mission context
   chainproof version

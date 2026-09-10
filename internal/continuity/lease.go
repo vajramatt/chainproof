@@ -18,3 +18,9 @@ type MissionLease struct {
 	Timestamp       time.Time `json:"timestamp"`
 	ExpiresAt       time.Time `json:"expires_at"`
 }
+
+type MissionAcquisition struct {
+	Mission Mission        `json:"mission"`
+	Lease   MissionLease   `json:"lease"`
+	Context MissionContext `json:"context"`
+}

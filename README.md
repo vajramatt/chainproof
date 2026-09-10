@@ -176,6 +176,7 @@ then anchors that state to an exact run-proof prefix.
 ```sh
 chainproof mission start --agent builder --objective "Ship durable continuity"
 chainproof mission list --status active
+chainproof mission acquire --holder worker-a --ttl 30m
 chainproof codex work --mission MISSION_ID
 chainproof checkpoint MISSION_ID RUN_ID '{
   "summary": "Storage and API tests pass",
@@ -213,6 +214,17 @@ chainproof codex work --mission MISSION_ID --exec --prompt "Finish pending tests
 ```
 
 When `--mission` is omitted, the most recently updated active mission is used.
+
+Long-running workers can atomically take next available verified mission:
+
+```sh
+chainproof codex work --acquire --holder queue-worker --exec --prompt "Continue mission" -- --model gpt-5.6-sol
+```
+
+`mission acquire` returns mission, new lease, and bounded verified context as
+one JSON envelope. It selects oldest available active mission, skips live
+leases, reclaims expired leases, and refuses invalid continuity. `codex work
+--acquire` uses same path before starting Codex, removing list/claim race.
 
 Competing agents coordinate with expiring mission leases. Claims are atomic;
 renewal and release require the current lease token. Handoff atomically issues
@@ -521,6 +533,7 @@ It does not edit the repositories or harness histories it observes.
 | `chainproof service status` | inspect the native user service |
 | `chainproof mission start` | start durable work across sessions |
 | `chainproof mission list` | discover missions by status |
+| `chainproof mission acquire` | atomically claim available work with verified context |
 | `chainproof mission complete` | close a mission after a valid checkpoint |
 | `chainproof mission export` | export checkpoints and anchored run proofs |
 | `chainproof mission claim` | atomically acquire an expiring mission lease |
@@ -548,7 +561,7 @@ It does not edit the repositories or harness histories it observes.
 | `chainproof search QUERY` | search structured local provenance evidence |
 | `chainproof codex sync` | discover and import Codex sessions once |
 | `chainproof codex watch` | continuously follow Codex sessions |
-| `chainproof codex work` | run Codex with verified mission context and checkpoint instructions |
+| `chainproof codex work` | run or atomically acquire Codex work with verified mission context |
 
 Run `chainproof --help` for the one-screen version.
 
