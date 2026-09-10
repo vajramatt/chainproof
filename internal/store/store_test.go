@@ -2,13 +2,44 @@ package store
 
 import (
 	"context"
+	"os"
 	"reflect"
+	"runtime"
 	"strings"
 	"testing"
 
 	"github.com/vajramatt/chainproof/internal/identity"
 	"github.com/vajramatt/chainproof/internal/proof"
 )
+
+func TestOpenRepairsLedgerFilePermissions(t *testing.T) {
+	if runtime.GOOS == "windows" {
+		t.Skip("Windows does not expose POSIX permission bits")
+	}
+	path := t.TempDir() + "/test.db"
+	s, err := Open(path)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if err = s.Close(); err != nil {
+		t.Fatal(err)
+	}
+	if err = os.Chmod(path, 0644); err != nil {
+		t.Fatal(err)
+	}
+	s, err = Open(path)
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer s.Close()
+	info, err := os.Stat(path)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if info.Mode().Perm() != 0600 {
+		t.Fatalf("ledger mode = %o, want 600", info.Mode().Perm())
+	}
+}
 
 func TestLifecycleAndVerification(t *testing.T) {
 	s, e := Open(t.TempDir() + "/test.db")

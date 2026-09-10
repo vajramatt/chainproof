@@ -8,12 +8,43 @@ import (
 	"path/filepath"
 	"strings"
 	"testing"
+	"time"
 
 	"github.com/vajramatt/chainproof/internal/adapters/codex"
 	"github.com/vajramatt/chainproof/internal/continuity"
 	"github.com/vajramatt/chainproof/internal/proof"
 	"github.com/vajramatt/chainproof/internal/store"
 )
+
+func TestServerRefusesNonLoopbackListener(t *testing.T) {
+	db, err := store.Open(filepath.Join(t.TempDir(), "test.db"))
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer db.Close()
+	app := New(db, "0.0.0.0:0", NewStatus("test"))
+	done := make(chan error, 1)
+	go func() { done <- app.ListenAndServe() }()
+	select {
+	case err = <-done:
+		if err == nil || !strings.Contains(err.Error(), "loopback") {
+			t.Fatalf("non-loopback listener returned unexpected error: %v", err)
+		}
+	case <-time.After(100 * time.Millisecond):
+		shutdownCtx, cancel := context.WithTimeout(context.Background(), time.Second)
+		defer cancel()
+		_ = app.Shutdown(shutdownCtx)
+		t.Fatal("server accepted non-loopback listener")
+	}
+}
+
+func TestLoopbackListenerAddressesAreAccepted(t *testing.T) {
+	for _, address := range []string{"127.0.0.1:7331", "localhost:7331", "[::1]:7331"} {
+		if err := ValidateListenAddress(address); err != nil {
+			t.Errorf("loopback address %q rejected: %v", address, err)
+		}
+	}
+}
 
 func TestWebExplorerExplainsVerificationBoundary(t *testing.T) {
 	db, err := store.Open(filepath.Join(t.TempDir(), "test.db"))

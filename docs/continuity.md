@@ -320,8 +320,8 @@ Lease mutation bodies use `holder`, `lease_id`, and integer `ttl_seconds` as
 required by each action. Local API lease semantics match CLI semantics.
 
 Checkpoint requests accept `run_id`, `summary`, `commitments`, `next_actions`,
-`blockers`, `evidence`, and `extensions`. The API remains loopback-only by
-default and has no multi-user authentication.
+`blockers`, `evidence`, and `extensions`. The API accepts only loopback listen
+addresses and has no multi-user authentication.
 
 Recovery acceptance accepts `reason` plus checkpoint state fields. Recovery
 rejection accepts `{"reason":"..."}`. Store logic derives and reserves the

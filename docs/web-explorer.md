@@ -2,6 +2,11 @@
 
 > Product and implementation brief for the next ChainProof web interface.
 
+This document mixes shipped foundations with proposed behavior. Sections mark
+future work with `should`, `likely additions`, or phase labels; proposed
+commands such as `chainproof open` and `chainproof web` do not exist yet. Use
+`chainproof --help` and the README for the current interface.
+
 ChainProof should keep a local web interface. The current dashboard is a useful
 prototype, but it is not yet a compelling reason for a developer to leave the
 TUI. The next interface should be rebuilt around investigation rather than
@@ -134,7 +139,7 @@ evidence in one click without making everyone read it by default.
 
 ### Local means local
 
-- bind to loopback by default
+- accept only loopback listen addresses
 - make no third-party requests
 - load no remote fonts, scripts, telemetry, or CDNs
 - work offline after installation
@@ -341,14 +346,32 @@ Existing foundation:
 
 ```text
 GET /api/status
+POST /api/missions
+POST /api/missions/acquire
+GET /api/missions
+POST /api/missions/{id}/checkpoints
+GET /api/missions/{id}/resume
+GET /api/missions/{id}/context
+GET /api/missions/{id}/recovery/{run_id}
+POST /api/missions/{id}/recovery/{run_id}/accept
+POST /api/missions/{id}/recovery/{run_id}/reject
+GET /api/missions/{id}/lease
+POST /api/missions/{id}/lease/claim
+POST /api/missions/{id}/lease/renew
+POST /api/missions/{id}/lease/handoff
+POST /api/missions/{id}/lease/release
 GET /api/runs
+POST /api/runs
 GET /api/runs/{id}
 GET /api/runs/{id}/events
+POST /api/runs/{id}/events
+POST /api/runs/{id}/complete
 GET /api/runs/{id}/verify
 GET /api/runs/{id}/lineage
 GET /api/search
 GET /api/events/{id}
 GET /api/artifacts/{hash}
+PUT /api/artifacts/{hash}
 ```
 
 Likely additions:

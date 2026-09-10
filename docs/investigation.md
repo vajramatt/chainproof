@@ -62,5 +62,5 @@ Run metadata may include `parent_run_id` (or the legacy `parent_chain_id`). The
 lineage endpoint resolves that relationship in both directions without making
 vendor-specific assumptions about how a harness names subagents.
 
-The API remains bound to loopback by default and has no multi-user
-authentication. Do not expose it to a network.
+The API accepts only loopback listen addresses and has no multi-user
+authentication. Non-loopback binding is rejected before the server starts.

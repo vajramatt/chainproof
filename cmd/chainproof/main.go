@@ -28,7 +28,7 @@ import (
 	"github.com/vajramatt/chainproof/internal/tui"
 )
 
-var version = "0.6.0"
+var version = "development"
 
 func main() {
 	if err := run(os.Args[1:]); err != nil {
@@ -941,6 +941,9 @@ func newCodexCollector(db *store.Store) (*codexadapter.Collector, error) {
 }
 
 func runDaemon(parent context.Context, db *store.Store, address string, announce bool) error {
+	if err := server.ValidateListenAddress(address); err != nil {
+		return err
+	}
 	ctx, cancel := signal.NotifyContext(parent, os.Interrupt, syscall.SIGTERM)
 	defer cancel()
 	runtimeStatus := server.NewStatus(version)

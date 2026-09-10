@@ -93,6 +93,46 @@ without SQLite or a ChainProof server. Planned mission workspaces will make
 that boundary easier to carry between machines; Markdown will be a generated
 readable view, not canonical coordination state.
 
+## Path to autonomous use
+
+ChainProof can support controlled local pilots today. One machine can run
+cooperative agents against one ledger through the CLI, TUI, embedded web
+explorer, and loopback API. Broader unattended use needs these release gates:
+
+1. **Machine-readable bootstrap.** Add idempotent `chainproof init --json`,
+   `chainproof capabilities --json`, and `chainproof doctor --json` commands,
+   stable exit codes, and structured errors. An agent must be able to discover
+   installed features, create or load identity, inspect available work, and
+   diagnose its environment without parsing prose.
+2. **Process and failure hardening.** Test independent OS processes sharing one
+   database, WAL recovery after forced termination, interrupted checkpoints,
+   expired leases, corrupted profiles, lost keys, database upgrades, and
+   backup/restore. Existing goroutine coverage is necessary but not sufficient
+   for autonomous multi-agent operation.
+3. **Clean-install verification.** Exercise release archives, checksums,
+   installer, first-run profile creation, service setup, TUI, loopback web
+   explorer, and uninstall behavior on clean supported macOS and Linux systems.
+4. **Portable mission rehydration.** Extend continuity export with import and
+   rebuild paths for structured JSON/JSONL records, artifacts, verification
+   manifests, and generated Markdown summaries. Another ChainProof instance
+   must be able to verify and resume transferred work without trusting the
+   source database.
+5. **Integration packaging.** Ship agent-readable setup and lifecycle guidance
+   for Codex, Claude Code, OpenClaw, and generic harnesses. Each integration
+   must preserve provenance mode and same local trust boundary.
+
+Target autonomous lifecycle:
+
+```text
+discover → identify → inspect → acquire → work → checkpoint → verify → handoff
+```
+
+Next release should package current identity work only after machine-readable
+bootstrap, multi-process and crash tests, and clean-install validation pass.
+Signed attestations, key recovery, and private multi-host coordination follow;
+they are not prerequisites for local cooperative use. Publicly exposing the
+unauthenticated loopback service is not part of this path.
+
 ## Install
 
 ChainProof is one Go binary. Install the latest release on macOS or Linux:
@@ -586,9 +626,10 @@ ChainProof stores runs, canonical events, adapter cursors, and artifacts in a
 local SQLite database using WAL mode and serialized writes. Artifact hashes are
 computed over raw bytes—not decoded text—and content-addressed by SHA-256.
 
-The web server binds to `127.0.0.1:7331` by default and rejects non-local host
-headers. ChainProof intentionally has no multi-user authentication; do not
-expose it to a network.
+The web server accepts only loopback listen addresses and defaults to
+`127.0.0.1:7331`. It also rejects non-local host headers. ChainProof
+intentionally has no multi-user authentication and cannot be bound directly to
+a non-loopback interface.
 
 The things ChainProof writes are its own:
 

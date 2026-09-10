@@ -10,11 +10,10 @@ formats, and release artifacts.
 - The public marketing site lives in `../chainproof-site` and deploys to
   `chainproof.ai`. Do not add marketing pages or Cloudflare deployment config
   here.
-- The hosted multi-tenant product lives in `../chainproof-saas`. Do not add
-  accounts, billing, hosted storage, or SaaS administration here.
-- `site/index.html` is part of the OSS application. It is the embedded,
-  loopback-only web explorer served by `chainproof serve`, not the marketing
-  website.
+- ChainProof is not a hosted SaaS product. Do not add accounts, billing,
+  hosted storage, tenancy, or SaaS administration here.
+- `internal/server/ui/index.html` is the embedded, loopback-only web explorer
+  served by `chainproof serve`, not the marketing website.
 
 ## Product invariants
 
@@ -44,8 +43,8 @@ formats, and release artifacts.
   was true.
 - Preserve provenance modes (`observed`, `reported`, `imported`, `derived`) and
   never present derived evidence as directly observed.
-- Bind local HTTP services to loopback by default and avoid third-party browser
-  assets, telemetry, or network requests.
+- Allow local HTTP services to bind only to loopback and avoid third-party
+  browser assets, telemetry, or network requests.
 - Keep the shipped product dependency-light and compatible with a single-binary
   release.
 

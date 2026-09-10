@@ -18,6 +18,10 @@ For release `vX.Y.Z`, update these source defaults in one reviewed commit:
 Release builder injects tag without leading `v` into binary. Source fallback
 still matters for `go install`, which bypasses release builder.
 
+After publishing, change fallback on post-release `main` back to
+`development`. Untagged source builds must not identify themselves as latest
+release after behavior diverges from that tag.
+
 ## Verify candidate
 
 ```sh

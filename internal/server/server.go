@@ -5,7 +5,9 @@ import (
 	_ "embed"
 	"encoding/json"
 	"errors"
+	"fmt"
 	"io"
+	"net"
 	"net/http"
 	"strconv"
 	"strings"
@@ -292,7 +294,12 @@ func (s *Server) getEvent(w http.ResponseWriter, r *http.Request) {
 func (s *Server) getStatus(w http.ResponseWriter, r *http.Request) {
 	respond(w, s.status.Snapshot(), nil, http.StatusOK)
 }
-func (s *Server) ListenAndServe() error              { return s.http.ListenAndServe() }
+func (s *Server) ListenAndServe() error {
+	if err := ValidateListenAddress(s.http.Addr); err != nil {
+		return err
+	}
+	return s.http.ListenAndServe()
+}
 func (s *Server) Shutdown(ctx context.Context) error { return s.http.Shutdown(ctx) }
 func (s *Server) listRuns(w http.ResponseWriter, r *http.Request) {
 	v, e := s.store.Runs(r.Context(), 100)
@@ -414,12 +421,33 @@ func localhostOnly(next http.Handler) http.Handler {
 			host = host[:i]
 		}
 		host = strings.Trim(host, "[]")
-		if host != "localhost" && host != "127.0.0.1" && host != "::1" {
+		if !isLoopbackHost(host) {
 			http.Error(w, "local access only", http.StatusForbidden)
 			return
 		}
 		next.ServeHTTP(w, r)
 	})
+}
+
+// ValidateListenAddress rejects any address outside ChainProof's local-only
+// network boundary.
+func ValidateListenAddress(address string) error {
+	host, _, err := net.SplitHostPort(address)
+	if err != nil {
+		return fmt.Errorf("invalid listen address: %w", err)
+	}
+	if !isLoopbackHost(host) {
+		return fmt.Errorf("ChainProof requires a loopback listen address; %q is not local", host)
+	}
+	return nil
+}
+
+func isLoopbackHost(host string) bool {
+	if strings.EqualFold(host, "localhost") {
+		return true
+	}
+	ip := net.ParseIP(host)
+	return ip != nil && ip.IsLoopback()
 }
 func cors(next http.Handler) http.Handler {
 	return http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {

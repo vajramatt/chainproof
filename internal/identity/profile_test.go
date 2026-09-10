@@ -4,6 +4,7 @@ import (
 	"encoding/json"
 	"os"
 	"path/filepath"
+	"runtime"
 	"strings"
 	"sync"
 	"testing"
@@ -31,13 +32,15 @@ func TestEnsureCreatesStablePrivateAgentProfile(t *testing.T) {
 	}
 
 	keyPath := filepath.Join(root, "codex-main", "identity.key")
-	for _, path := range []string{profilePath, keyPath} {
-		info, statErr := os.Stat(path)
-		if statErr != nil {
-			t.Fatal(statErr)
-		}
-		if info.Mode().Perm() != 0600 {
-			t.Fatalf("%s mode = %o, want 600", path, info.Mode().Perm())
+	if runtime.GOOS != "windows" {
+		for _, path := range []string{profilePath, keyPath} {
+			info, statErr := os.Stat(path)
+			if statErr != nil {
+				t.Fatal(statErr)
+			}
+			if info.Mode().Perm() != 0600 {
+				t.Fatalf("%s mode = %o, want 600", path, info.Mode().Perm())
+			}
 		}
 	}
 	raw, err := os.ReadFile(profilePath)

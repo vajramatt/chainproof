@@ -8,6 +8,7 @@ import (
 	"encoding/json"
 	"errors"
 	"fmt"
+	"os"
 	"time"
 
 	"github.com/google/uuid"
@@ -46,6 +47,10 @@ func Open(path string) (*Store, error) {
 	CREATE INDEX IF NOT EXISTS provenance_timestamp ON provenance_index(timestamp);`); err != nil {
 		db.Close()
 		return nil, err
+	}
+	if err = os.Chmod(path, 0600); err != nil {
+		db.Close()
+		return nil, fmt.Errorf("secure ledger permissions: %w", err)
 	}
 	s := &Store{db: db, leaseNow: time.Now}
 	if err = s.rebuildMissingIndex(context.Background()); err != nil {

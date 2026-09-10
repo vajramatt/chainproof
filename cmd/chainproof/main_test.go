@@ -81,6 +81,19 @@ func TestMissionCLIStartsCheckpointsAndResumes(t *testing.T) {
 	}
 }
 
+func TestRunDaemonRejectsNonLoopbackBeforeCollectorSetup(t *testing.T) {
+	db, err := store.Open(filepath.Join(t.TempDir(), "chainproof.db"))
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer db.Close()
+	t.Setenv("CHAINPROOF_CODEX_CONTENT", "invalid")
+	err = runDaemon(context.Background(), db, "0.0.0.0:7331", false)
+	if err == nil || !strings.Contains(err.Error(), "loopback") {
+		t.Fatalf("non-loopback address was not rejected before collector setup: %v", err)
+	}
+}
+
 func TestAgentEnsureWhoamiAndAutonomousAttribution(t *testing.T) {
 	dbPath := filepath.Join(t.TempDir(), "chainproof.db")
 	t.Setenv("CHAINPROOF_DB", dbPath)

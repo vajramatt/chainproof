@@ -138,7 +138,7 @@ be emitted when mission or run-anchor verification fails.
 
 A valid continuity bundle proves that checkpoint bytes and anchored run-proof
 bytes are internally continuous relative to the declared heads. It does not
-prove that a reported or imported claim was true, that the named agent has a
-cryptographic identity, that an objective was achieved, or that the complete
-bundle existed before a verifier first learned its chain head. Signing and
-external anchoring require a future version.
+prove that a reported or imported claim was true, that an attributed agent
+possessed the private key behind its key-derived ID, that an objective was
+achieved, or that the complete bundle existed before a verifier first learned
+its chain head. Signing and external anchoring require a future version.
