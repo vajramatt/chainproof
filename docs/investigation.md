@@ -14,6 +14,21 @@ This distinction lets the interface be fast without pretending that a search
 index is authoritative. Opening an older database creates the index and
 backfills any missing rows; canonical events and chain heads are untouched.
 
+## SQLite and portable files
+
+SQLite is the operational store, not a network dependency. It gives concurrent
+local agents atomic appends, serialized lease changes, indexes, and consistent
+queries. Canonical events remain independently verifiable because proof bundles
+carry structured run and event records plus chain heads; verification does not
+require original database or running ChainProof instance.
+
+Markdown is useful as generated mission context or human-readable summary, but
+is not suitable as canonical coordination state: parsing is ambiguous, atomic
+multi-agent updates are difficult, and schema evolution is fragile. Roadmap
+work will add first-class portable mission workspaces built from structured
+proof records, with optional generated Markdown views and SQLite rebuild/import
+paths.
+
 ## Indexed evidence
 
 Each event projects these fields:

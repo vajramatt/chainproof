@@ -55,6 +55,8 @@ formats, and release artifacts.
   changing product semantics or the proof format.
 - Treat SQLite indexes and UI summaries as rebuildable views; the append-only
   ledger is the source of truth.
+- Keep portable proof formats independent from SQLite. Treat Markdown as a
+  generated readable view, not canonical multi-agent coordination state.
 - Update tests and documentation with behavior changes.
 - Do not edit generated release artifacts directly.
 

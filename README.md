@@ -68,7 +68,10 @@ Next work deepens the same local-first architecture rather than adding a hosted
 control plane:
 
 - release and installation hardening for the agent-first build
+- agent-native discovery, bootstrap, initialization, and self-service
 - richer native integrations beyond Codex
+- first-class portable mission workspaces using structured proof records and
+  generated Markdown views while retaining SQLite for live coordination
 - deeper local web investigation across timelines, diffs, artifacts, failures,
   comparisons, and proof reports
 - durable remote-executor handoff and multi-host lease coordination
@@ -82,6 +85,13 @@ it, whether collection was live or retrospective, where it sits in the run,
 and the exact hash link that would change if history were rewritten. The
 search index and cockpit are disposable views; the canonical ledger remains
 the evidence.
+
+SQLite is the local operational engine: it provides atomic appends,
+transactions, leases, indexes, and safe coordination among local agents.
+Portable structured proof bundles are the interchange boundary and verify
+without SQLite or a ChainProof server. Planned mission workspaces will make
+that boundary easier to carry between machines; Markdown will be a generated
+readable view, not canonical coordination state.
 
 ## Install
 
