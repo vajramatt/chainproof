@@ -599,19 +599,41 @@ func (s *Store) uncheckpointedMissionWork(ctx context.Context, missionID string)
 }
 
 func (s *Store) CompleteMission(ctx context.Context, missionID string) (continuity.Mission, error) {
-	mission, err := s.Mission(ctx, missionID)
+	tx, err := s.db.BeginTx(ctx, nil)
+	if err != nil {
+		return continuity.Mission{}, err
+	}
+	defer tx.Rollback()
+	mission, err := scanMission(tx.QueryRowContext(ctx, `SELECT mission_id,agent,objective,status,created_at,updated_at,checkpoint_count,chain_head,metadata FROM missions WHERE mission_id=?`, missionID))
 	if err != nil {
 		return continuity.Mission{}, err
 	}
 	if mission.Status != "active" {
 		return continuity.Mission{}, fmt.Errorf("mission is %s", mission.Status)
 	}
-	verification := s.VerifyMission(ctx, missionID)
-	if mission.CheckpointCount == 0 || !verification.Valid {
+	if mission.CheckpointCount == 0 {
 		return continuity.Mission{}, errors.New("mission requires at least one valid checkpoint")
 	}
-	now := time.Now().UTC().Format(time.RFC3339Nano)
-	result, err := s.db.ExecContext(ctx, `UPDATE missions SET status='completed',updated_at=? WHERE mission_id=? AND status='active'`, now, missionID)
+	if err = verifyMissionContinuityTx(ctx, tx, mission); err != nil {
+		return continuity.Mission{}, errors.New("mission requires at least one valid checkpoint")
+	}
+	var hasUncheckpointed int
+	if err = tx.QueryRowContext(ctx, `SELECT EXISTS(
+		SELECT 1 FROM runs r
+		WHERE (r.run_id IN (SELECT run_id FROM mission_runs WHERE mission_id=?) OR json_extract(r.metadata,'$.mission_id')=?)
+		AND r.entry_count > COALESCE((
+			SELECT MAX(CAST(json_extract(c.checkpoint_json,'$.run.entry_count') AS INTEGER))
+			FROM checkpoints c
+			WHERE c.mission_id=? AND json_extract(c.checkpoint_json,'$.run.run_id')=r.run_id
+		),0)
+	)`, missionID, missionID, missionID).Scan(&hasUncheckpointed); err != nil {
+		return continuity.Mission{}, err
+	}
+	if hasUncheckpointed != 0 {
+		return continuity.Mission{}, errors.New("mission has uncheckpointed work; reconcile every run before completion")
+	}
+	now := time.Now().UTC()
+	result, err := tx.ExecContext(ctx, `UPDATE missions SET status='completed',updated_at=? WHERE mission_id=? AND status='active'`, now.Format(time.RFC3339Nano), missionID)
 	if err != nil {
 		return continuity.Mission{}, err
 	}
@@ -619,7 +641,12 @@ func (s *Store) CompleteMission(ctx context.Context, missionID string) (continui
 	if changed != 1 {
 		return continuity.Mission{}, errors.New("active mission not found")
 	}
-	return s.Mission(ctx, missionID)
+	if err = tx.Commit(); err != nil {
+		return continuity.Mission{}, err
+	}
+	mission.Status = "completed"
+	mission.UpdatedAt = now
+	return mission, nil
 }
 
 func (s *Store) MissionBundle(ctx context.Context, missionID string) (continuity.Bundle, error) {

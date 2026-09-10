@@ -122,5 +122,6 @@ add richer reported or observed evidence to `CHAINPROOF_RUN_ID` during work.
 
 Protocol v1 assumes one local user and cooperative harnesses. Environment
 variables are discovery hints, not cryptographic agent identity. Future
-versions may add mission leases, signed agent identity, and durable context-file
-handoff for remote executors without changing continuity checkpoint hashes.
+versions may add multi-host lease coordination, signed agent identity, and
+durable context-file handoff for remote executors without changing continuity
+checkpoint hashes.

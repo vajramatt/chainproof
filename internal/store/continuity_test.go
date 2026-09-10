@@ -170,6 +170,44 @@ func TestCompleteMissionRequiresValidCheckpointChain(t *testing.T) {
 	}
 }
 
+func TestCompleteMissionRequiresRecoveryReconciliation(t *testing.T) {
+	s, err := Open(t.TempDir() + "/test.db")
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer s.Close()
+	ctx := context.Background()
+	mission, _ := s.StartMission(ctx, continuity.MissionInput{Agent: "builder", Objective: "Finish without losing interrupted work"})
+	run, _ := s.Start(ctx, "builder", "codex", "gpt-test", map[string]any{"mission_id": mission.ID})
+	s.Append(ctx, run.ID, proof.EventInput{Kind: "decision", Source: proof.Source{Adapter: "test", Mode: "reported"}})
+	s.CreateCheckpoint(ctx, mission.ID, run.ID, continuity.CheckpointInput{Summary: "Trusted state"})
+	s.Append(ctx, run.ID, proof.EventInput{Kind: "tool.result", Source: proof.Source{Adapter: "test", Mode: "observed"}})
+
+	if _, err = s.CompleteMission(ctx, mission.ID); err == nil || !strings.Contains(err.Error(), "uncheckpointed work") {
+		t.Fatalf("mission completed with unreconciled tail: %v", err)
+	}
+	active, loadErr := s.Mission(ctx, mission.ID)
+	if loadErr != nil {
+		t.Fatal(loadErr)
+	}
+	if active.Status != "active" {
+		t.Fatalf("blocked completion changed mission status: %+v", active)
+	}
+	if _, err = s.RejectRecovery(ctx, mission.ID, run.ID, "tail not needed"); err != nil {
+		t.Fatal(err)
+	}
+	completed, err := s.CompleteMission(ctx, mission.ID)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if completed.Status != "completed" {
+		t.Fatalf("reconciled mission did not complete: %+v", completed)
+	}
+	if _, err = s.Append(ctx, run.ID, proof.EventInput{Kind: "late.event", Source: proof.Source{Adapter: "test", Mode: "reported"}}); err == nil || !strings.Contains(err.Error(), "mission is completed") {
+		t.Fatalf("completed mission accepted new work: %v", err)
+	}
+}
+
 func TestMissionBundleContainsPortableAnchoredRunProof(t *testing.T) {
 	s, err := Open(t.TempDir() + "/test.db")
 	if err != nil {

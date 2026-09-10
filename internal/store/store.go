@@ -84,6 +84,14 @@ func (s *Store) Append(ctx context.Context, runID string, input proof.EventInput
 	if run.Status != "active" && run.Status != "idle" {
 		return proof.Event{}, fmt.Errorf("run is %s", run.Status)
 	}
+	var missionStatus string
+	err = tx.QueryRowContext(ctx, `SELECT status FROM missions WHERE mission_id IN (SELECT mission_id FROM mission_runs WHERE run_id=? UNION SELECT json_extract(metadata,'$.mission_id') FROM runs WHERE run_id=?) LIMIT 1`, runID, runID).Scan(&missionStatus)
+	if err != nil && !errors.Is(err, sql.ErrNoRows) {
+		return proof.Event{}, err
+	}
+	if missionStatus == "completed" {
+		return proof.Event{}, errors.New("mission is completed")
+	}
 	if input.Source.Mode == "" {
 		input.Source.Mode = "reported"
 	}

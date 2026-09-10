@@ -274,6 +274,11 @@ chainproof verify-continuity-file continuity-proof.json
 chainproof mission complete MISSION_ID
 ```
 
+Completion is terminal local control state. ChainProof refuses completion while
+any associated run has uncheckpointed events; accept or reject every recovery
+tail first. Once completed, associated runs reject new appends so later work
+cannot silently appear beyond final checkpoint.
+
 Checkpoint integrity does not make a summary true. Agent identity is a local
 name in continuity v1, not a cryptographic signature. See
 [`docs/continuity.md`](docs/continuity.md) for the workflow and
