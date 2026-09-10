@@ -106,6 +106,19 @@ func (s *Store) CreateCheckpoint(ctx context.Context, missionID, runID string, i
 	if err != nil {
 		return continuity.Checkpoint{}, err
 	}
+	var previous *continuity.Checkpoint
+	if mission.CheckpointCount > 0 {
+		loaded, loadErr := latestCheckpointTx(ctx, tx, missionID)
+		if loadErr != nil {
+			return continuity.Checkpoint{}, loadErr
+		}
+		previous = &loaded
+	}
+	if input.Recovery != nil {
+		if err = prepareRecoveryCheckpoint(ctx, tx, mission, run, previous, &input); err != nil {
+			return continuity.Checkpoint{}, err
+		}
+	}
 	evidenceRefs := append([]continuity.EvidenceRef{}, input.Evidence...)
 	for _, commitment := range input.Commitments {
 		evidenceRefs = append(evidenceRefs, commitment.Evidence...)
@@ -118,16 +131,7 @@ func (s *Store) CreateCheckpoint(ctx context.Context, missionID, runID string, i
 			return continuity.Checkpoint{}, fmt.Errorf("evidence event %q is outside anchored run prefix", evidence.EventID)
 		}
 	}
-	if mission.CheckpointCount > 0 {
-		var raw, hash string
-		if err = tx.QueryRowContext(ctx, `SELECT checkpoint_json,checkpoint_hash FROM checkpoints WHERE mission_id=? ORDER BY sequence DESC LIMIT 1`, missionID).Scan(&raw, &hash); err != nil {
-			return continuity.Checkpoint{}, err
-		}
-		var previous continuity.Checkpoint
-		if err = json.Unmarshal([]byte(raw), &previous); err != nil {
-			return continuity.Checkpoint{}, err
-		}
-		previous.CheckpointHash = hash
+	if previous != nil {
 		previousByID := make(map[string]continuity.Commitment, len(previous.Commitments))
 		for _, commitment := range previous.Commitments {
 			previousByID[commitment.ID] = commitment
@@ -181,6 +185,242 @@ func (s *Store) CreateCheckpoint(ctx context.Context, missionID, runID string, i
 		return continuity.Checkpoint{}, err
 	}
 	return checkpoint, nil
+}
+
+func (s *Store) InspectRecovery(ctx context.Context, missionID, runID string) (continuity.RecoveryInspection, error) {
+	tx, err := s.db.BeginTx(ctx, &sql.TxOptions{ReadOnly: true})
+	if err != nil {
+		return continuity.RecoveryInspection{}, err
+	}
+	defer tx.Rollback()
+	mission, err := scanMission(tx.QueryRowContext(ctx, `SELECT mission_id,agent,objective,status,created_at,updated_at,checkpoint_count,chain_head,metadata FROM missions WHERE mission_id=?`, missionID))
+	if err != nil {
+		return continuity.RecoveryInspection{}, err
+	}
+	if err = verifyMissionContinuityTx(ctx, tx, mission); err != nil {
+		return continuity.RecoveryInspection{}, err
+	}
+	run, err := scanRun(tx.QueryRowContext(ctx, `SELECT run_id,agent,harness,model,status,started_at,completed_at,entry_count,chain_head,metadata FROM runs WHERE run_id=?`, runID))
+	if err != nil {
+		return continuity.RecoveryInspection{}, err
+	}
+	anchoredCount, anchoredHead, err := recoveryBoundaryTx(ctx, tx, missionID, runID)
+	if err != nil {
+		return continuity.RecoveryInspection{}, err
+	}
+	if run.EntryCount <= anchoredCount {
+		return continuity.RecoveryInspection{}, errors.New("run has no uncheckpointed work")
+	}
+	bundle, err := runBundleTx(ctx, tx, continuity.RunAnchor{RunID: run.ID, EntryCount: run.EntryCount, ChainHead: run.ChainHead})
+	if err != nil {
+		return continuity.RecoveryInspection{}, err
+	}
+	verification := proof.VerifyBundle(bundle)
+	if !verification.Valid {
+		return continuity.RecoveryInspection{}, fmt.Errorf("run verification failed: %s", verification.Reason)
+	}
+	return continuity.RecoveryInspection{
+		SchemaVersion: "1", Source: proof.Source{Adapter: "recovery-inspector", Mode: "derived"}, MissionID: missionID, RunID: runID,
+		AnchoredEntryCount: anchoredCount, AnchoredChainHead: anchoredHead,
+		CurrentEntryCount: run.EntryCount, CurrentChainHead: run.ChainHead,
+		Verification: verification, Events: bundle.Events[anchoredCount:],
+	}, nil
+}
+
+func (s *Store) AcceptRecovery(ctx context.Context, missionID, runID, reason string, input continuity.CheckpointInput) (continuity.Checkpoint, error) {
+	input.Recovery = &continuity.RecoveryInput{Decision: "accepted", Reason: reason}
+	return s.CreateCheckpoint(ctx, missionID, runID, input)
+}
+
+func (s *Store) RejectRecovery(ctx context.Context, missionID, runID, reason string) (continuity.Checkpoint, error) {
+	return s.CreateCheckpoint(ctx, missionID, runID, continuity.CheckpointInput{Recovery: &continuity.RecoveryInput{Decision: "rejected", Reason: reason}})
+}
+
+func latestCheckpointTx(ctx context.Context, tx *sql.Tx, missionID string) (continuity.Checkpoint, error) {
+	var raw, hash string
+	if err := tx.QueryRowContext(ctx, `SELECT checkpoint_json,checkpoint_hash FROM checkpoints WHERE mission_id=? ORDER BY sequence DESC LIMIT 1`, missionID).Scan(&raw, &hash); err != nil {
+		return continuity.Checkpoint{}, err
+	}
+	var checkpoint continuity.Checkpoint
+	if err := json.Unmarshal([]byte(raw), &checkpoint); err != nil {
+		return continuity.Checkpoint{}, err
+	}
+	checkpoint.CheckpointHash = hash
+	return checkpoint, nil
+}
+
+func prepareRecoveryCheckpoint(ctx context.Context, tx *sql.Tx, mission continuity.Mission, run proof.Run, previous *continuity.Checkpoint, input *continuity.CheckpointInput) error {
+	decision := strings.TrimSpace(input.Recovery.Decision)
+	reason := strings.TrimSpace(input.Recovery.Reason)
+	if decision != "accepted" && decision != "rejected" {
+		return errors.New("recovery decision must be accepted or rejected")
+	}
+	if reason == "" {
+		return errors.New("recovery reason is required")
+	}
+	if err := verifyMissionContinuityTx(ctx, tx, mission); err != nil {
+		return err
+	}
+	anchoredCount, anchoredHead, err := recoveryBoundaryTx(ctx, tx, mission.ID, run.ID)
+	if err != nil {
+		return err
+	}
+	if run.EntryCount <= anchoredCount {
+		return errors.New("run has no uncheckpointed work")
+	}
+	bundle, err := runBundleTx(ctx, tx, continuity.RunAnchor{RunID: run.ID, EntryCount: run.EntryCount, ChainHead: run.ChainHead})
+	if err != nil {
+		return err
+	}
+	if verification := proof.VerifyBundle(bundle); !verification.Valid {
+		return fmt.Errorf("run verification failed: %s", verification.Reason)
+	}
+	if input.Extensions == nil {
+		input.Extensions = map[string]any{}
+	} else {
+		copied := make(map[string]any, len(input.Extensions)+1)
+		for key, value := range input.Extensions {
+			copied[key] = value
+		}
+		input.Extensions = copied
+	}
+	if _, exists := input.Extensions["chainproof.recovery.v1"]; exists {
+		return errors.New("chainproof.recovery.v1 extension is reserved")
+	}
+	input.Extensions["chainproof.recovery.v1"] = map[string]any{
+		"decision": decision, "reason": reason, "run_id": run.ID,
+		"from_entry_count": anchoredCount, "from_chain_head": anchoredHead,
+		"to_entry_count": run.EntryCount, "to_chain_head": run.ChainHead,
+	}
+	input.Source = proof.Source{Adapter: "recovery", Mode: "reported"}
+	if decision == "rejected" {
+		if previous == nil {
+			input.Summary = "Uncheckpointed work rejected; no prior trusted checkpoint exists."
+			input.Commitments = []continuity.Commitment{}
+			input.NextActions = []string{}
+			input.Blockers = []string{}
+			input.Evidence = []continuity.EvidenceRef{}
+			return nil
+		}
+		input.Summary = previous.Summary
+		input.NextActions = append([]string{}, previous.NextActions...)
+		input.Blockers = append([]string{}, previous.Blockers...)
+		sameRun := previous.Run.RunID == run.ID
+		if sameRun {
+			input.Evidence = append([]continuity.EvidenceRef{}, previous.Evidence...)
+		} else {
+			input.Evidence = []continuity.EvidenceRef{}
+		}
+		input.Commitments = make([]continuity.Commitment, len(previous.Commitments))
+		for i, commitment := range previous.Commitments {
+			input.Commitments[i] = commitment
+			input.Commitments[i].AcceptanceCriteria = append([]string{}, commitment.AcceptanceCriteria...)
+			if sameRun {
+				input.Commitments[i].Evidence = append([]continuity.EvidenceRef{}, commitment.Evidence...)
+			} else {
+				input.Commitments[i].Evidence = []continuity.EvidenceRef{}
+			}
+		}
+	}
+	return nil
+}
+
+func recoveryBoundaryTx(ctx context.Context, tx *sql.Tx, missionID, runID string) (int, string, error) {
+	var associated int
+	if err := tx.QueryRowContext(ctx, `SELECT (EXISTS(SELECT 1 FROM mission_runs WHERE mission_id=? AND run_id=?) OR EXISTS(SELECT 1 FROM runs WHERE run_id=? AND json_extract(metadata,'$.mission_id')=?))`, missionID, runID, runID, missionID).Scan(&associated); err != nil {
+		return 0, "", err
+	}
+	if associated == 0 {
+		return 0, "", errors.New("run is not associated with mission")
+	}
+	var raw string
+	err := tx.QueryRowContext(ctx, `SELECT checkpoint_json FROM checkpoints WHERE mission_id=? AND json_extract(checkpoint_json,'$.run.run_id')=? ORDER BY CAST(json_extract(checkpoint_json,'$.run.entry_count') AS INTEGER) DESC LIMIT 1`, missionID, runID).Scan(&raw)
+	if errors.Is(err, sql.ErrNoRows) {
+		return 0, continuity.GenesisHash, nil
+	}
+	if err != nil {
+		return 0, "", err
+	}
+	var anchored continuity.Checkpoint
+	if err = json.Unmarshal([]byte(raw), &anchored); err != nil {
+		return 0, "", err
+	}
+	return anchored.Run.EntryCount, anchored.Run.ChainHead, nil
+}
+
+func verifyMissionContinuityTx(ctx context.Context, tx *sql.Tx, mission continuity.Mission) error {
+	rows, err := tx.QueryContext(ctx, `SELECT checkpoint_json,checkpoint_hash FROM checkpoints WHERE mission_id=? ORDER BY sequence`, mission.ID)
+	if err != nil {
+		return err
+	}
+	checkpoints := []continuity.Checkpoint{}
+	for rows.Next() {
+		var raw, hash string
+		if err = rows.Scan(&raw, &hash); err != nil {
+			rows.Close()
+			return err
+		}
+		var checkpoint continuity.Checkpoint
+		if err = json.Unmarshal([]byte(raw), &checkpoint); err != nil {
+			rows.Close()
+			return err
+		}
+		checkpoint.CheckpointHash = hash
+		checkpoints = append(checkpoints, checkpoint)
+	}
+	if err = rows.Err(); err != nil {
+		rows.Close()
+		return err
+	}
+	if err = rows.Close(); err != nil {
+		return err
+	}
+	if verification := continuity.Verify(mission, checkpoints); !verification.Valid {
+		return fmt.Errorf("continuity verification failed: %s", verification.Reason)
+	}
+	for _, checkpoint := range checkpoints {
+		bundle, bundleErr := runBundleTx(ctx, tx, checkpoint.Run)
+		if bundleErr != nil || !proof.VerifyBundle(bundle).Valid {
+			return errors.New("continuity verification failed: run_anchor_invalid")
+		}
+	}
+	return nil
+}
+
+func runBundleTx(ctx context.Context, tx *sql.Tx, anchor continuity.RunAnchor) (proof.Bundle, error) {
+	run, err := scanRun(tx.QueryRowContext(ctx, `SELECT run_id,agent,harness,model,status,started_at,completed_at,entry_count,chain_head,metadata FROM runs WHERE run_id=?`, anchor.RunID))
+	if err != nil || anchor.EntryCount < 0 || anchor.EntryCount > run.EntryCount {
+		return proof.Bundle{}, errors.New("invalid run anchor")
+	}
+	rows, err := tx.QueryContext(ctx, `SELECT event_json,event_hash FROM events WHERE run_id=? AND sequence<? ORDER BY sequence`, anchor.RunID, anchor.EntryCount)
+	if err != nil {
+		return proof.Bundle{}, err
+	}
+	events := []proof.Event{}
+	for rows.Next() {
+		var raw, hash string
+		if err = rows.Scan(&raw, &hash); err != nil {
+			rows.Close()
+			return proof.Bundle{}, err
+		}
+		var event proof.Event
+		if err = json.Unmarshal([]byte(raw), &event); err != nil {
+			rows.Close()
+			return proof.Bundle{}, err
+		}
+		event.EventHash = hash
+		events = append(events, event)
+	}
+	if err = rows.Err(); err != nil {
+		rows.Close()
+		return proof.Bundle{}, err
+	}
+	if err = rows.Close(); err != nil {
+		return proof.Bundle{}, err
+	}
+	run.EntryCount = anchor.EntryCount
+	run.ChainHead = anchor.ChainHead
+	return proof.Bundle{Format: "chainproof.bundle.v1", Run: run, Events: events}, nil
 }
 
 func (s *Store) Checkpoints(ctx context.Context, missionID string) ([]continuity.Checkpoint, error) {

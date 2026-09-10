@@ -159,6 +159,65 @@ func TestContextCLIUsesWrappedMissionEnvironment(t *testing.T) {
 	}
 }
 
+func TestRecoveryCLIInspectsAcceptsAndRejectsUncheckpointedWork(t *testing.T) {
+	t.Setenv("CHAINPROOF_DB", filepath.Join(t.TempDir(), "chainproof.db"))
+	t.Setenv("CHAINPROOF_CODEX_DISABLED", "1")
+	missionJSON := captureStdout(t, func() error {
+		return run([]string{"mission", "start", "--agent", "builder", "--objective", "Reconcile interrupted work"})
+	})
+	var mission continuity.Mission
+	if err := json.Unmarshal([]byte(missionJSON), &mission); err != nil {
+		t.Fatal(err)
+	}
+	firstRunJSON := captureStdout(t, func() error { return run([]string{"start", "--mission", mission.ID}) })
+	var firstRun proof.Run
+	if err := json.Unmarshal([]byte(firstRunJSON), &firstRun); err != nil {
+		t.Fatal(err)
+	}
+	if err := run([]string{"append", firstRun.ID, `{"kind":"tool.result","source":{"adapter":"test","mode":"observed"},"payload":{"status":"passed"}}`}); err != nil {
+		t.Fatal(err)
+	}
+	inspectionJSON := captureStdout(t, func() error {
+		return run([]string{"recovery", "inspect", mission.ID, firstRun.ID})
+	})
+	var inspection continuity.RecoveryInspection
+	if err := json.Unmarshal([]byte(inspectionJSON), &inspection); err != nil {
+		t.Fatal(err)
+	}
+	if len(inspection.Events) != 1 || !inspection.Verification.Valid {
+		t.Fatalf("unexpected inspection: %+v", inspection)
+	}
+	acceptedJSON := captureStdout(t, func() error {
+		return run([]string{"recovery", "accept", mission.ID, firstRun.ID, `{"reason":"tests reviewed","summary":"Recovered result accepted"}`})
+	})
+	var accepted continuity.Checkpoint
+	if err := json.Unmarshal([]byte(acceptedJSON), &accepted); err != nil {
+		t.Fatal(err)
+	}
+	if accepted.Summary != "Recovered result accepted" {
+		t.Fatalf("accept failed: %+v", accepted)
+	}
+	secondRunJSON := captureStdout(t, func() error { return run([]string{"start", "--mission", mission.ID}) })
+	var secondRun proof.Run
+	if err := json.Unmarshal([]byte(secondRunJSON), &secondRun); err != nil {
+		t.Fatal(err)
+	}
+	if err := run([]string{"append", secondRun.ID, `{"kind":"tool.result","source":{"adapter":"test","mode":"imported"},"payload":{"status":"unknown"}}`}); err != nil {
+		t.Fatal(err)
+	}
+	rejectedJSON := captureStdout(t, func() error {
+		return run([]string{"recovery", "reject", mission.ID, secondRun.ID, "untrusted imported output"})
+	})
+	var rejected continuity.Checkpoint
+	if err := json.Unmarshal([]byte(rejectedJSON), &rejected); err != nil {
+		t.Fatal(err)
+	}
+	recovery, ok := rejected.Extensions["chainproof.recovery.v1"].(map[string]any)
+	if !ok || recovery["decision"] != "rejected" || recovery["reason"] != "untrusted imported output" {
+		t.Fatalf("reject failed: %+v", rejected)
+	}
+}
+
 func TestCheckpointCurrentUsesWrappedAgentEnvironment(t *testing.T) {
 	t.Setenv("CHAINPROOF_DB", filepath.Join(t.TempDir(), "chainproof.db"))
 	t.Setenv("CHAINPROOF_CODEX_DISABLED", "1")

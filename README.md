@@ -247,6 +247,25 @@ and its cited run evidence. It also flags verified run entries newer than the
 latest checkpoint as uncheckpointed recovery work without silently injecting
 their payloads into inherited context.
 
+Review interrupted work before resuming it:
+
+```sh
+chainproof recovery inspect MISSION_ID RUN_ID
+chainproof recovery accept MISSION_ID RUN_ID '{
+  "reason": "tests and changes reviewed",
+  "summary": "Recovered work is safe to continue",
+  "next_actions": ["finish integration"]
+}'
+chainproof recovery reject MISSION_ID RUN_ID "output contradicted tests"
+```
+
+Acceptance writes reviewed state as a reported checkpoint. Rejection anchors
+the exact discarded tail while carrying forward the prior trusted state. It
+does not delete events or promote rejected payloads into trusted evidence.
+Both decisions are stored under the hashed `chainproof.recovery.v1` checkpoint
+extension, then disappear from `uncheckpointed_work` because the run prefix is
+now explicitly reconciled.
+
 Export the mission and every anchored run prefix as one portable session proof:
 
 ```sh
@@ -516,6 +535,9 @@ It does not edit the repositories or harness histories it observes.
 | `chainproof checkpoint` | anchor resumable state to a run-proof prefix |
 | `chainproof resume` | verify and load the latest mission checkpoint |
 | `chainproof context` | compile bounded verified mission context for an agent |
+| `chainproof recovery inspect` | inspect verified uncheckpointed run events |
+| `chainproof recovery accept` | checkpoint reviewed recovered state |
+| `chainproof recovery reject` | reject a tail while preserving prior trusted state |
 | `chainproof verify-continuity-file` | verify portable mission proof offline |
 | `chainproof list` | print local runs as JSON |
 | `chainproof search QUERY` | search structured local provenance evidence |

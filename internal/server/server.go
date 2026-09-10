@@ -34,6 +34,9 @@ func New(db *store.Store, address string, status *Status) *Server {
 	mux.HandleFunc("POST /api/missions/{id}/checkpoints", s.createCheckpoint)
 	mux.HandleFunc("GET /api/missions/{id}/resume", s.resumeMission)
 	mux.HandleFunc("GET /api/missions/{id}/context", s.missionContext)
+	mux.HandleFunc("GET /api/missions/{id}/recovery/{run_id}", s.inspectRecovery)
+	mux.HandleFunc("POST /api/missions/{id}/recovery/{run_id}/accept", s.acceptRecovery)
+	mux.HandleFunc("POST /api/missions/{id}/recovery/{run_id}/reject", s.rejectRecovery)
 	mux.HandleFunc("GET /api/missions/{id}/lease", s.missionLease)
 	mux.HandleFunc("POST /api/missions/{id}/lease/claim", s.claimMission)
 	mux.HandleFunc("POST /api/missions/{id}/lease/renew", s.renewMission)
@@ -209,6 +212,48 @@ func (s *Server) missionContext(w http.ResponseWriter, r *http.Request) {
 	}
 	compiled, err := s.store.BuildMissionContext(r.Context(), r.PathValue("id"), maxEvidence)
 	respond(w, compiled, err, http.StatusOK)
+}
+
+type recoveryCheckpointRequest struct {
+	Reason      string                   `json:"reason"`
+	Summary     string                   `json:"summary"`
+	Commitments []continuity.Commitment  `json:"commitments,omitempty"`
+	NextActions []string                 `json:"next_actions,omitempty"`
+	Blockers    []string                 `json:"blockers,omitempty"`
+	Evidence    []continuity.EvidenceRef `json:"evidence,omitempty"`
+	Extensions  map[string]any           `json:"extensions,omitempty"`
+}
+
+func (s *Server) inspectRecovery(w http.ResponseWriter, r *http.Request) {
+	inspection, err := s.store.InspectRecovery(r.Context(), r.PathValue("id"), r.PathValue("run_id"))
+	respond(w, inspection, err, http.StatusOK)
+}
+
+func (s *Server) acceptRecovery(w http.ResponseWriter, r *http.Request) {
+	var input recoveryCheckpointRequest
+	err := decode(r, &input)
+	if err == nil {
+		checkpoint, acceptErr := s.store.AcceptRecovery(r.Context(), r.PathValue("id"), r.PathValue("run_id"), input.Reason, continuity.CheckpointInput{
+			Summary: input.Summary, Commitments: input.Commitments, NextActions: input.NextActions,
+			Blockers: input.Blockers, Evidence: input.Evidence, Extensions: input.Extensions,
+		})
+		respond(w, checkpoint, acceptErr, http.StatusCreated)
+		return
+	}
+	respond(w, nil, err, 0)
+}
+
+func (s *Server) rejectRecovery(w http.ResponseWriter, r *http.Request) {
+	var input struct {
+		Reason string `json:"reason"`
+	}
+	err := decode(r, &input)
+	if err == nil {
+		checkpoint, rejectErr := s.store.RejectRecovery(r.Context(), r.PathValue("id"), r.PathValue("run_id"), input.Reason)
+		respond(w, checkpoint, rejectErr, http.StatusCreated)
+		return
+	}
+	respond(w, nil, err, 0)
 }
 
 func (s *Server) search(w http.ResponseWriter, r *http.Request) {
