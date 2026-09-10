@@ -103,6 +103,8 @@ type MissionContext struct {
 	Mission               Mission              `json:"mission"`
 	Checkpoint            *Checkpoint          `json:"checkpoint,omitempty"`
 	Verification          Verification         `json:"verification"`
+	Lease                 *MissionLease        `json:"lease,omitempty"`
+	LeaseActive           bool                 `json:"lease_active"`
 	Evidence              []proof.Event        `json:"evidence"`
 	EvidenceTruncated     bool                 `json:"evidence_truncated"`
 	HasUncheckpointedWork bool                 `json:"has_uncheckpointed_work"`

@@ -203,6 +203,53 @@ func TestMissionListCLIShowsDiscoverableWork(t *testing.T) {
 	}
 }
 
+func TestMissionLeaseCLIClaimsHandsOffAndReleases(t *testing.T) {
+	t.Setenv("CHAINPROOF_DB", filepath.Join(t.TempDir(), "chainproof.db"))
+	t.Setenv("CHAINPROOF_CODEX_DISABLED", "1")
+	missionJSON := captureStdout(t, func() error {
+		return run([]string{"mission", "start", "--agent", "builder", "--objective", "Coordinate workers"})
+	})
+	var mission continuity.Mission
+	if err := json.Unmarshal([]byte(missionJSON), &mission); err != nil {
+		t.Fatal(err)
+	}
+	claimJSON := captureStdout(t, func() error {
+		return run([]string{"mission", "claim", mission.ID, "--holder", "worker-a", "--ttl", "10m"})
+	})
+	var first continuity.MissionLease
+	if err := json.Unmarshal([]byte(claimJSON), &first); err != nil {
+		t.Fatal(err)
+	}
+	if first.Holder != "worker-a" || first.Action != "claimed" {
+		t.Fatalf("unexpected claim: %+v", first)
+	}
+	if err := run([]string{"mission", "claim", mission.ID, "--holder", "worker-b"}); err == nil || !strings.Contains(err.Error(), "claimed by worker-a") {
+		t.Fatalf("competing CLI claim succeeded: %v", err)
+	}
+	handoffJSON := captureStdout(t, func() error {
+		return run([]string{"mission", "handoff", mission.ID, first.LeaseID, "--to", "worker-b", "--ttl", "20m"})
+	})
+	var next continuity.MissionLease
+	if err := json.Unmarshal([]byte(handoffJSON), &next); err != nil {
+		t.Fatal(err)
+	}
+	if next.Holder != "worker-b" || next.Action != "handoff" || next.PreviousLeaseID != first.LeaseID {
+		t.Fatalf("unexpected CLI handoff: %+v", next)
+	}
+	statusJSON := captureStdout(t, func() error { return run([]string{"mission", "lease", mission.ID}) })
+	var status struct {
+		Active bool                    `json:"active"`
+		Lease  continuity.MissionLease `json:"lease"`
+	}
+	if err := json.Unmarshal([]byte(statusJSON), &status); err != nil {
+		t.Fatal(err)
+	}
+	if !status.Active || status.Lease.LeaseID != next.LeaseID {
+		t.Fatalf("unexpected CLI lease status: %+v", status)
+	}
+	captureStdout(t, func() error { return run([]string{"mission", "release", mission.ID, next.LeaseID}) })
+}
+
 func TestStartRunInheritsMissionAgent(t *testing.T) {
 	t.Setenv("CHAINPROOF_DB", filepath.Join(t.TempDir(), "chainproof.db"))
 	t.Setenv("CHAINPROOF_CODEX_DISABLED", "1")

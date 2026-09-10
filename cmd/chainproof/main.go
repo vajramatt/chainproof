@@ -111,7 +111,7 @@ func run(args []string) error {
 		return nil
 	case "mission":
 		if len(args) < 2 {
-			return errors.New("usage: chainproof mission start|list|complete|export")
+			return errors.New("usage: chainproof mission start|list|complete|export|claim|lease|renew|handoff|release")
 		}
 		switch args[1] {
 		case "start":
@@ -158,8 +158,71 @@ func run(args []string) error {
 			}
 			fmt.Println(args[3])
 			return nil
+		case "claim":
+			if len(args) < 3 {
+				return errors.New("usage: chainproof mission claim MISSION_ID --holder HOLDER [--ttl 30m]")
+			}
+			fs := flag.NewFlagSet("mission claim", flag.ContinueOnError)
+			holder := fs.String("holder", "", "")
+			ttl := fs.Duration("ttl", 30*time.Minute, "")
+			if e = fs.Parse(args[3:]); e != nil {
+				return e
+			}
+			lease, claimErr := db.ClaimMission(ctx, args[2], continuity.LeaseInput{Holder: *holder, TTL: *ttl})
+			return output(lease, claimErr)
+		case "lease":
+			if len(args) < 3 {
+				return errors.New("usage: chainproof mission lease MISSION_ID [--history]")
+			}
+			fs := flag.NewFlagSet("mission lease", flag.ContinueOnError)
+			historyFlag := fs.Bool("history", false, "")
+			if e = fs.Parse(args[3:]); e != nil {
+				return e
+			}
+			lease, active, leaseErr := db.MissionLease(ctx, args[2])
+			if leaseErr != nil {
+				return leaseErr
+			}
+			response := map[string]any{"active": active, "lease": lease}
+			if *historyFlag {
+				history, historyErr := db.MissionLeaseHistory(ctx, args[2])
+				if historyErr != nil {
+					return historyErr
+				}
+				response["history"] = history
+			}
+			return output(response, nil)
+		case "renew":
+			if len(args) < 4 {
+				return errors.New("usage: chainproof mission renew MISSION_ID LEASE_ID [--ttl 30m]")
+			}
+			fs := flag.NewFlagSet("mission renew", flag.ContinueOnError)
+			ttl := fs.Duration("ttl", 30*time.Minute, "")
+			if e = fs.Parse(args[4:]); e != nil {
+				return e
+			}
+			lease, renewErr := db.RenewMission(ctx, args[2], args[3], *ttl)
+			return output(lease, renewErr)
+		case "handoff":
+			if len(args) < 4 {
+				return errors.New("usage: chainproof mission handoff MISSION_ID LEASE_ID --to HOLDER [--ttl 30m]")
+			}
+			fs := flag.NewFlagSet("mission handoff", flag.ContinueOnError)
+			holder := fs.String("to", "", "")
+			ttl := fs.Duration("ttl", 30*time.Minute, "")
+			if e = fs.Parse(args[4:]); e != nil {
+				return e
+			}
+			lease, handoffErr := db.HandoffMission(ctx, args[2], args[3], continuity.LeaseInput{Holder: *holder, TTL: *ttl})
+			return output(lease, handoffErr)
+		case "release":
+			if len(args) < 4 {
+				return errors.New("usage: chainproof mission release MISSION_ID LEASE_ID")
+			}
+			lease, releaseErr := db.ReleaseMission(ctx, args[2], args[3])
+			return output(lease, releaseErr)
 		default:
-			return errors.New("usage: chainproof mission start|list|complete|export")
+			return errors.New("usage: chainproof mission start|list|complete|export|claim|lease|renew|handoff|release")
 		}
 	case "start":
 		fs := flag.NewFlagSet("start", flag.ContinueOnError)
@@ -659,6 +722,13 @@ Usage:
                                               Discover durable missions
   chainproof mission complete MISSION_ID      Close after a valid checkpoint
   chainproof mission export MISSION_ID [FILE] Export portable continuity proof
+  chainproof mission claim MISSION_ID --holder H [--ttl 30m]
+                                              Atomically claim active mission
+  chainproof mission lease MISSION_ID [--history]
+                                              Inspect current lease and history
+  chainproof mission renew MISSION_ID LEASE_ID [--ttl 30m]
+  chainproof mission handoff MISSION_ID LEASE_ID --to H [--ttl 30m]
+  chainproof mission release MISSION_ID LEASE_ID
   chainproof start [--agent A --harness H --model M --mission ID]
   chainproof append RUN_ID [JSON]            Append one reported event
   chainproof ingest RUN_ID < events.jsonl    Import a JSONL stream

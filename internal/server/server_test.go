@@ -246,3 +246,52 @@ func TestRunAPIBindsToMissionAndInheritsAgent(t *testing.T) {
 		t.Fatalf("run not bound to mission: %+v", run)
 	}
 }
+
+func TestMissionLeaseAPIExposesAtomicHandoff(t *testing.T) {
+	db, err := store.Open(filepath.Join(t.TempDir(), "test.db"))
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer db.Close()
+	mission, _ := db.StartMission(context.Background(), continuity.MissionInput{Agent: "builder", Objective: "Coordinate API workers"})
+	app := New(db, "127.0.0.1:0", NewStatus("test"))
+	request := httptest.NewRequest(http.MethodPost, "http://localhost/api/missions/"+mission.ID+"/lease/claim", strings.NewReader(`{"holder":"worker-a","ttl_seconds":600}`))
+	response := httptest.NewRecorder()
+	app.http.Handler.ServeHTTP(response, request)
+	if response.Code != http.StatusCreated {
+		t.Fatalf("claim status %d: %s", response.Code, response.Body.String())
+	}
+	var first continuity.MissionLease
+	if err = json.NewDecoder(response.Body).Decode(&first); err != nil {
+		t.Fatal(err)
+	}
+	request = httptest.NewRequest(http.MethodPost, "http://localhost/api/missions/"+mission.ID+"/lease/handoff", strings.NewReader(`{"lease_id":"`+first.LeaseID+`","holder":"worker-b","ttl_seconds":1200}`))
+	response = httptest.NewRecorder()
+	app.http.Handler.ServeHTTP(response, request)
+	if response.Code != http.StatusCreated {
+		t.Fatalf("handoff status %d: %s", response.Code, response.Body.String())
+	}
+	request = httptest.NewRequest(http.MethodGet, "http://localhost/api/missions/"+mission.ID+"/lease?history=1", nil)
+	response = httptest.NewRecorder()
+	app.http.Handler.ServeHTTP(response, request)
+	if response.Code != http.StatusOK {
+		t.Fatalf("lease status %d: %s", response.Code, response.Body.String())
+	}
+	var state struct {
+		Active  bool                      `json:"active"`
+		Lease   continuity.MissionLease   `json:"lease"`
+		History []continuity.MissionLease `json:"history"`
+	}
+	if err = json.NewDecoder(response.Body).Decode(&state); err != nil {
+		t.Fatal(err)
+	}
+	if !state.Active || state.Lease.Holder != "worker-b" || len(state.History) != 2 {
+		t.Fatalf("unexpected lease API state: %+v", state)
+	}
+}
+
+func TestMissionLeaseAPIRejectsOverflowingTTL(t *testing.T) {
+	if _, err := (leaseRequest{TTLSeconds: int64(1<<63 - 1)}).ttl(); err == nil {
+		t.Fatal("overflowing ttl_seconds was accepted")
+	}
+}

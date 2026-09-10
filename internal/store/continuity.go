@@ -272,6 +272,14 @@ func (s *Store) BuildMissionContext(ctx context.Context, missionID string, maxEv
 		return continuity.MissionContext{}, err
 	}
 	compiled.HasUncheckpointedWork = len(compiled.UncheckpointedWork) > 0
+	lease, leaseActive, leaseErr := s.MissionLease(ctx, missionID)
+	if leaseErr != nil {
+		return continuity.MissionContext{}, leaseErr
+	}
+	if lease.EventID != "" {
+		compiled.Lease = &lease
+	}
+	compiled.LeaseActive = leaseActive
 	if resume.Checkpoint == nil {
 		return compiled, nil
 	}
