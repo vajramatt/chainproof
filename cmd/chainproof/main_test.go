@@ -6,6 +6,7 @@ import (
 	"io"
 	"os"
 	"path/filepath"
+	"strings"
 	"testing"
 
 	"github.com/vajramatt/chainproof/internal/continuity"
@@ -293,6 +294,65 @@ func TestWrappedCommandEnvironmentHelper(t *testing.T) {
 	if err := json.NewEncoder(os.Stdout).Encode(map[string]string{
 		"mission_id": os.Getenv("CHAINPROOF_MISSION_ID"), "run_id": os.Getenv("CHAINPROOF_RUN_ID"),
 		"context_file": contextPath, "context_mission": contextMission,
+	}); err != nil {
+		os.Exit(2)
+	}
+	os.Exit(0)
+}
+
+func TestCodexWorkStartsMissionAwareCodex(t *testing.T) {
+	t.Setenv("CHAINPROOF_DB", filepath.Join(t.TempDir(), "chainproof.db"))
+	t.Setenv("CHAINPROOF_CODEX_DISABLED", "1")
+	t.Setenv("CHAINPROOF_CODEX_BIN", os.Args[0])
+	t.Setenv("CHAINPROOF_CODEX_WORK_HELPER", "1")
+	missionJSON := captureStdout(t, func() error {
+		return run([]string{"mission", "start", "--agent", "builder", "--objective", "Finish durable work"})
+	})
+	var mission continuity.Mission
+	if err := json.Unmarshal([]byte(missionJSON), &mission); err != nil {
+		t.Fatal(err)
+	}
+	childJSON := captureStdout(t, func() error {
+		return run([]string{"codex", "work", "--mission", mission.ID, "--prompt", "Continue implementation", "--", "-test.run=TestCodexWorkEnvironmentHelper"})
+	})
+	var child struct {
+		MissionID      string `json:"mission_id"`
+		RunID          string `json:"run_id"`
+		ContextMission string `json:"context_mission"`
+		Prompt         string `json:"prompt"`
+	}
+	if err := json.Unmarshal([]byte(childJSON), &child); err != nil {
+		t.Fatal(err)
+	}
+	if child.MissionID != mission.ID || child.RunID == "" || child.ContextMission != mission.ID {
+		t.Fatalf("Codex did not receive mission environment: %+v", child)
+	}
+	marker := `CHAINPROOF_AGENT_WORK_V1 {"mission_id":"` + mission.ID + `","parent_run_id":"` + child.RunID + `"}`
+	if !strings.Contains(child.Prompt, marker) || !strings.Contains(child.Prompt, "CHAINPROOF_CONTEXT_FILE") || !strings.Contains(child.Prompt, "chainproof checkpoint --current") || !strings.Contains(child.Prompt, "Continue implementation") {
+		t.Fatalf("Codex did not receive agent work protocol prompt: %q", child.Prompt)
+	}
+}
+
+func TestCodexWorkEnvironmentHelper(t *testing.T) {
+	if os.Getenv("CHAINPROOF_CODEX_WORK_HELPER") != "1" {
+		return
+	}
+	contextMission := ""
+	if raw, err := os.ReadFile(os.Getenv("CHAINPROOF_CONTEXT_FILE")); err == nil {
+		var compiled continuity.MissionContext
+		if json.Unmarshal(raw, &compiled) == nil {
+			contextMission = compiled.Mission.ID
+		}
+	}
+	prompt := ""
+	if len(os.Args) > 1 {
+		prompt = os.Args[len(os.Args)-1]
+	}
+	if err := json.NewEncoder(os.Stdout).Encode(map[string]string{
+		"mission_id":      os.Getenv("CHAINPROOF_MISSION_ID"),
+		"run_id":          os.Getenv("CHAINPROOF_RUN_ID"),
+		"context_mission": contextMission,
+		"prompt":          prompt,
 	}); err != nil {
 		os.Exit(2)
 	}

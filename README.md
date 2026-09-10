@@ -176,7 +176,7 @@ then anchors that state to an exact run-proof prefix.
 ```sh
 chainproof mission start --agent builder --objective "Ship durable continuity"
 chainproof mission list --status active
-chainproof run --mission MISSION_ID -- codex
+chainproof codex work --mission MISSION_ID
 chainproof checkpoint MISSION_ID RUN_ID '{
   "summary": "Storage and API tests pass",
   "commitments": [{
@@ -198,6 +198,18 @@ stable bootstrap contract while leaving prompt injection and checkpoint writing
 to its integration. Wrapped agents can call `chainproof context` and
 `chainproof checkpoint --current` without copying identifiers. See
 [`spec/agent-work-v1.md`](spec/agent-work-v1.md).
+
+`chainproof codex work` is the native Codex integration. It verifies and injects
+mission context, tells Codex to checkpoint before ending, and emits a linkage
+marker that the local collector validates against the mission execution run.
+Codex options follow `--`; use `--exec` for non-interactive work:
+
+```sh
+chainproof codex work --mission MISSION_ID -- --model gpt-5.6-sol
+chainproof codex work --mission MISSION_ID --exec --prompt "Finish pending tests" -- --model gpt-5.6-sol
+```
+
+When `--mission` is omitted, the most recently updated active mission is used.
 
 `chainproof resume` without an ID loads the most recently updated active
 mission. It returns the latest checkpoint together with verification state, so
@@ -478,6 +490,7 @@ It does not edit the repositories or harness histories it observes.
 | `chainproof search QUERY` | search structured local provenance evidence |
 | `chainproof codex sync` | discover and import Codex sessions once |
 | `chainproof codex watch` | continuously follow Codex sessions |
+| `chainproof codex work` | run Codex with verified mission context and checkpoint instructions |
 
 Run `chainproof --help` for the one-screen version.
 

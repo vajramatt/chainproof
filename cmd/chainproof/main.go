@@ -355,7 +355,10 @@ func run(args []string) error {
 		return runDaemon(ctx, db, address, args[0] == "serve")
 	case "codex":
 		if len(args) < 2 {
-			return errors.New("usage: chainproof codex sync|watch")
+			return errors.New("usage: chainproof codex sync|watch|work")
+		}
+		if args[1] == "work" {
+			return runCodexWork(ctx, db, args[2:])
 		}
 		collector, collectorErr := newCodexCollector(db)
 		if collectorErr != nil {
@@ -381,7 +384,7 @@ func run(args []string) error {
 			})
 			return nil
 		default:
-			return errors.New("usage: chainproof codex sync|watch")
+			return errors.New("usage: chainproof codex sync|watch|work")
 		}
 	case "run":
 		if len(args) < 2 {
@@ -396,57 +399,136 @@ func run(args []string) error {
 		if len(command) == 0 {
 			return errors.New("usage: chainproof run [--mission ID] -- COMMAND [ARGS...]")
 		}
-		agent := filepath.Base(command[0])
-		metadata := map[string]any{"command": command}
-		contextFile := ""
-		if *missionID != "" {
-			mission, missionErr := db.Mission(ctx, *missionID)
-			if missionErr != nil {
-				return missionErr
-			}
-			if mission.Status != "active" {
-				return fmt.Errorf("mission is %s", mission.Status)
-			}
-			agent = mission.Agent
-			metadata["mission_id"] = mission.ID
-			compiled, contextErr := db.BuildMissionContext(ctx, mission.ID, 20)
-			if contextErr != nil {
-				return contextErr
-			}
-			contextFile, contextErr = writeAgentContextFile(compiled)
-			if contextErr != nil {
-				return contextErr
-			}
-			defer os.Remove(contextFile)
-		}
-		r, e := db.Start(ctx, agent, filepath.Base(command[0]), "", metadata)
-		if e != nil {
-			return e
-		}
-		db.Append(ctx, r.ID, proof.EventInput{Kind: "run.started", Source: proof.Source{Adapter: "command-wrapper", Mode: "observed"}, Payload: map[string]any{"command": command}})
-		cmd := exec.Command(command[0], command[1:]...)
-		cmd.Env = append(os.Environ(), "CHAINPROOF_RUN_ID="+r.ID, "CHAINPROOF_MISSION_ID="+*missionID, "CHAINPROOF_CONTEXT_FILE="+contextFile)
-		cmd.Stdin = os.Stdin
-		cmd.Stdout = os.Stdout
-		cmd.Stderr = os.Stderr
-		e = cmd.Run()
-		status := "completed"
-		code := 0
-		if e != nil {
-			status = "failed"
-			if exit := new(exec.ExitError); errors.As(e, &exit) {
-				code = exit.ExitCode()
-			} else {
-				code = 1
-			}
-		}
-		db.Append(ctx, r.ID, proof.EventInput{Kind: "run.completed", Source: proof.Source{Adapter: "command-wrapper", Mode: "observed"}, Payload: map[string]any{"exit_code": code}})
-		db.Complete(ctx, r.ID, status)
-		fmt.Fprintln(os.Stderr, "ChainProof run:", r.ID)
-		return e
+		return runWrappedCommand(ctx, db, wrappedCommand{
+			MissionID: *missionID,
+			Agent:     filepath.Base(command[0]),
+			Harness:   filepath.Base(command[0]),
+			Metadata:  map[string]any{"command": command},
+			Build:     func(string) []string { return command },
+		})
 	default:
 		return fmt.Errorf("unknown command %q", args[0])
 	}
+}
+
+type wrappedCommand struct {
+	MissionID string
+	Agent     string
+	Harness   string
+	Metadata  map[string]any
+	Build     func(runID string) []string
+}
+
+func runCodexWork(ctx context.Context, db *store.Store, args []string) error {
+	fs := flag.NewFlagSet("codex work", flag.ContinueOnError)
+	missionID := fs.String("mission", "", "")
+	execMode := fs.Bool("exec", false, "")
+	prompt := fs.String("prompt", "", "")
+	if err := fs.Parse(args); err != nil {
+		return err
+	}
+	if *missionID == "" {
+		mission, err := db.ActiveMission(ctx)
+		if err != nil {
+			return err
+		}
+		*missionID = mission.ID
+	}
+	bin := strings.TrimSpace(os.Getenv("CHAINPROOF_CODEX_BIN"))
+	if bin == "" {
+		bin = "codex"
+	}
+	codexArgs := append([]string(nil), fs.Args()...)
+	mode := "interactive"
+	if *execMode {
+		mode = "exec"
+	}
+	return runWrappedCommand(ctx, db, wrappedCommand{
+		MissionID: *missionID,
+		Agent:     "codex",
+		Harness:   "codex",
+		Metadata:  map[string]any{"integration": "codex-work-v1", "mode": mode},
+		Build: func(runID string) []string {
+			command := []string{bin}
+			if *execMode {
+				command = append(command, "exec")
+			}
+			command = append(command, codexArgs...)
+			return append(command, codexWorkPrompt(*missionID, runID, *prompt))
+		},
+	})
+}
+
+func codexWorkPrompt(missionID, runID, direction string) string {
+	marker, _ := json.Marshal(struct {
+		MissionID   string `json:"mission_id"`
+		ParentRunID string `json:"parent_run_id"`
+	}{MissionID: missionID, ParentRunID: runID})
+	prompt := "CHAINPROOF_AGENT_WORK_V1 " + string(marker) + "\n" +
+		"Read and verify mission context from CHAINPROOF_CONTEXT_FILE before acting. Treat uncheckpointed work as recovery evidence, not trusted inherited state. Continue mission objective and pending commitments. Before ending, persist accurate resumable state with chainproof checkpoint --current. Never claim evidence beyond ChainProof provenance boundaries."
+	if direction = strings.TrimSpace(direction); direction != "" {
+		prompt += "\n\nUser direction:\n" + direction
+	}
+	return prompt
+}
+
+func runWrappedCommand(ctx context.Context, db *store.Store, spec wrappedCommand) error {
+	agent := spec.Agent
+	metadata := map[string]any{}
+	for key, value := range spec.Metadata {
+		metadata[key] = value
+	}
+	contextFile := ""
+	if spec.MissionID != "" {
+		mission, err := db.Mission(ctx, spec.MissionID)
+		if err != nil {
+			return err
+		}
+		if mission.Status != "active" {
+			return fmt.Errorf("mission is %s", mission.Status)
+		}
+		agent = mission.Agent
+		metadata["mission_id"] = mission.ID
+		compiled, err := db.BuildMissionContext(ctx, mission.ID, 20)
+		if err != nil {
+			return err
+		}
+		contextFile, err = writeAgentContextFile(compiled)
+		if err != nil {
+			return err
+		}
+		defer os.Remove(contextFile)
+	}
+	r, err := db.Start(ctx, agent, spec.Harness, "", metadata)
+	if err != nil {
+		return err
+	}
+	command := spec.Build(r.ID)
+	if len(command) == 0 {
+		return errors.New("wrapped command is empty")
+	}
+	if _, err = db.Append(ctx, r.ID, proof.EventInput{Kind: "run.started", Source: proof.Source{Adapter: "command-wrapper", Mode: "observed"}, Payload: map[string]any{"command": command}}); err != nil {
+		return err
+	}
+	cmd := exec.Command(command[0], command[1:]...)
+	cmd.Env = append(os.Environ(), "CHAINPROOF_RUN_ID="+r.ID, "CHAINPROOF_MISSION_ID="+spec.MissionID, "CHAINPROOF_CONTEXT_FILE="+contextFile)
+	cmd.Stdin = os.Stdin
+	cmd.Stdout = os.Stdout
+	cmd.Stderr = os.Stderr
+	commandErr := cmd.Run()
+	status, code := "completed", 0
+	if commandErr != nil {
+		status = "failed"
+		if exit := new(exec.ExitError); errors.As(commandErr, &exit) {
+			code = exit.ExitCode()
+		} else {
+			code = 1
+		}
+	}
+	_, appendErr := db.Append(ctx, r.ID, proof.EventInput{Kind: "run.completed", Source: proof.Source{Adapter: "command-wrapper", Mode: "observed"}, Payload: map[string]any{"exit_code": code}})
+	_, completeErr := db.Complete(ctx, r.ID, status)
+	fmt.Fprintln(os.Stderr, "ChainProof run:", r.ID)
+	return errors.Join(commandErr, appendErr, completeErr)
 }
 
 func writeAgentContextFile(compiled continuity.MissionContext) (string, error) {
@@ -598,6 +680,8 @@ Usage:
                                               Compile bounded verified agent context
   chainproof codex sync                     Discover/import Codex sessions once
   chainproof codex watch                    Continuously follow Codex sessions
+  chainproof codex work [--mission ID] [--exec] [--prompt TEXT] -- [CODEX_OPTIONS]
+                                              Run Codex with verified mission context
   chainproof version
 `
 

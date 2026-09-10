@@ -22,6 +22,7 @@ import (
 )
 
 const AdapterName = "codex-local-v1"
+const agentWorkMarker = "CHAINPROOF_AGENT_WORK_V1 "
 
 type Options struct {
 	Root         string
@@ -180,6 +181,11 @@ func (c *Collector) syncFile(ctx context.Context, path string) (bool, int, int, 
 				return created, imported, skipped, fmt.Errorf("offset %d: %w", offset, parseErr)
 			}
 			if len(metadata) > 0 {
+				if _, marked := metadata["agent_work_protocol"]; marked && !c.validAgentWorkLink(ctx, metadata) {
+					delete(metadata, "mission_id")
+					delete(metadata, "parent_run_id")
+					delete(metadata, "agent_work_protocol")
+				}
 				agent, _ := metadata["agent"].(string)
 				model, _ := metadata["model"].(string)
 				delete(metadata, "agent")
@@ -284,6 +290,8 @@ func (c *Collector) normalizeItem(input proof.EventInput, payload map[string]any
 	case "UserMessage":
 		input.Kind = "human.input"
 		base["content"] = c.protect(item["content"])
+		input.Payload = base
+		return input, agentWorkMetadata(item["content"]), true, nil
 	case "AgentMessage":
 		input.Kind = "model.output"
 		base["phase"] = item["phase"]
@@ -319,6 +327,56 @@ func (c *Collector) normalizeItem(input proof.EventInput, payload map[string]any
 	}
 	input.Payload = base
 	return input, nil, true, nil
+}
+
+func agentWorkMetadata(content any) map[string]any {
+	texts := []string{}
+	collectText(content, &texts)
+	for _, text := range texts {
+		for _, line := range strings.Split(text, "\n") {
+			line = strings.TrimSpace(line)
+			if !strings.HasPrefix(line, agentWorkMarker) {
+				continue
+			}
+			var marker struct {
+				MissionID   string `json:"mission_id"`
+				ParentRunID string `json:"parent_run_id"`
+			}
+			if json.Unmarshal([]byte(strings.TrimSpace(strings.TrimPrefix(line, agentWorkMarker))), &marker) == nil && marker.MissionID != "" && marker.ParentRunID != "" {
+				return map[string]any{"mission_id": marker.MissionID, "parent_run_id": marker.ParentRunID, "agent_work_protocol": "chainproof.agent-work.v1"}
+			}
+		}
+	}
+	return nil
+}
+
+func collectText(value any, texts *[]string) {
+	switch typed := value.(type) {
+	case string:
+		*texts = append(*texts, typed)
+	case []any:
+		for _, item := range typed {
+			collectText(item, texts)
+		}
+	case map[string]any:
+		if text, ok := typed["text"].(string); ok {
+			*texts = append(*texts, text)
+		}
+	}
+}
+
+func (c *Collector) validAgentWorkLink(ctx context.Context, metadata map[string]any) bool {
+	missionID, _ := metadata["mission_id"].(string)
+	parentRunID, _ := metadata["parent_run_id"].(string)
+	if _, err := c.store.Mission(ctx, missionID); err != nil {
+		return false
+	}
+	parent, err := c.store.Run(ctx, parentRunID)
+	if err != nil || parent.Harness != "codex" {
+		return false
+	}
+	linkedMission, _ := parent.Metadata["mission_id"].(string)
+	return linkedMission == missionID
 }
 
 func (c *Collector) protect(value any) any {

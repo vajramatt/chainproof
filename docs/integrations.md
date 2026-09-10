@@ -15,6 +15,29 @@ Codex session JSONL is a local implementation detail rather than ChainProof's
 public protocol. Its parser is versioned as `codex-local-v1`; unknown records
 are skipped, and fixtures must accompany parser changes.
 
+## Native Codex mission work
+
+```sh
+chainproof codex work --mission MISSION_ID
+chainproof codex work --exec --prompt "Continue pending work" -- --model MODEL
+```
+
+ChainProof starts an observed Codex execution envelope, compiles verified
+mission context, and injects Agent Work Protocol instructions into the initial
+prompt. Codex receives the standard `CHAINPROOF_*` environment. The initial
+prompt tells it to read context before acting and write
+`chainproof checkpoint --current` before ending.
+
+The built-in collector later imports Codex's richer native session as a
+separate child run. Its `CHAINPROOF_AGENT_WORK_V1` marker is accepted only when
+the referenced parent run exists, uses the Codex harness, and belongs to the
+same mission. This links two honest provenance views: observed process
+lifecycle and imported native session detail.
+
+`--mission` defaults to the most recently updated active mission. Use
+`CHAINPROOF_CODEX_BIN` when the executable is not named `codex`. Put Codex CLI
+options after `--`; use ChainProof's `--prompt` for additional user direction.
+
 ## Push
 
 Start `chainproof serve`, create a run with `POST /api/runs`, then append events
