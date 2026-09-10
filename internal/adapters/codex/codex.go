@@ -17,6 +17,7 @@ import (
 	"strings"
 	"time"
 
+	"github.com/vajramatt/chainproof/internal/identity"
 	"github.com/vajramatt/chainproof/internal/proof"
 	"github.com/vajramatt/chainproof/internal/store"
 )
@@ -181,10 +182,15 @@ func (c *Collector) syncFile(ctx context.Context, path string) (bool, int, int, 
 				return created, imported, skipped, fmt.Errorf("offset %d: %w", offset, parseErr)
 			}
 			if len(metadata) > 0 {
-				if _, marked := metadata["agent_work_protocol"]; marked && !c.validAgentWorkLink(ctx, metadata) {
-					delete(metadata, "mission_id")
-					delete(metadata, "parent_run_id")
-					delete(metadata, "agent_work_protocol")
+				if _, marked := metadata["agent_work_protocol"]; marked {
+					parent, valid := c.validAgentWorkLink(ctx, metadata)
+					if !valid {
+						delete(metadata, "mission_id")
+						delete(metadata, "parent_run_id")
+						delete(metadata, "agent_work_protocol")
+					} else if attribution, exists := parent.Metadata[identity.ExtensionKey]; exists {
+						metadata[identity.ExtensionKey] = attribution
+					}
 				}
 				agent, _ := metadata["agent"].(string)
 				model, _ := metadata["model"].(string)
@@ -365,18 +371,18 @@ func collectText(value any, texts *[]string) {
 	}
 }
 
-func (c *Collector) validAgentWorkLink(ctx context.Context, metadata map[string]any) bool {
+func (c *Collector) validAgentWorkLink(ctx context.Context, metadata map[string]any) (proof.Run, bool) {
 	missionID, _ := metadata["mission_id"].(string)
 	parentRunID, _ := metadata["parent_run_id"].(string)
 	if _, err := c.store.Mission(ctx, missionID); err != nil {
-		return false
+		return proof.Run{}, false
 	}
 	parent, err := c.store.Run(ctx, parentRunID)
 	if err != nil || parent.Harness != "codex" {
-		return false
+		return proof.Run{}, false
 	}
 	linkedMission, _ := parent.Metadata["mission_id"].(string)
-	return linkedMission == missionID
+	return parent, linkedMission == missionID
 }
 
 func (c *Collector) protect(value any) any {

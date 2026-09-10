@@ -11,6 +11,7 @@ import (
 	"time"
 
 	"github.com/vajramatt/chainproof/internal/continuity"
+	"github.com/vajramatt/chainproof/internal/identity"
 	"github.com/vajramatt/chainproof/internal/store"
 )
 
@@ -138,7 +139,12 @@ func TestSyncLinksNativeCodexSessionToMissionEnvelope(t *testing.T) {
 	if err != nil {
 		t.Fatal(err)
 	}
-	parent, err := db.Start(ctx, "builder", "codex", "", map[string]any{"mission_id": mission.ID})
+	profile, err := identity.Ensure(t.TempDir(), "builder", "Builder", "codex")
+	if err != nil {
+		t.Fatal(err)
+	}
+	parentIdentity := identity.Extension(profile, "worker:"+strings.Repeat("a", 32), "implementer")
+	parent, err := db.Start(ctx, "builder", "codex", "", map[string]any{"mission_id": mission.ID, "chainproof.agent.v1": parentIdentity})
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -159,12 +165,19 @@ func TestSyncLinksNativeCodexSessionToMissionEnvelope(t *testing.T) {
 	if run.Metadata["mission_id"] != mission.ID || run.Metadata["parent_run_id"] != parent.ID || run.Metadata["agent_work_protocol"] != "chainproof.agent-work.v1" {
 		t.Fatalf("native Codex run not linked to mission envelope: %+v", run.Metadata)
 	}
+	linkedIdentity, ok := run.Metadata["chainproof.agent.v1"].(map[string]any)
+	if !ok || linkedIdentity["agent_id"] != parentIdentity["agent_id"] || linkedIdentity["worker_id"] != parentIdentity["worker_id"] {
+		t.Fatalf("native Codex run omitted validated parent attribution: %+v", run.Metadata)
+	}
 	events, err := db.Events(ctx, run.ID)
 	if err != nil {
 		t.Fatal(err)
 	}
 	if len(events) != 2 || events[1].Kind != "human.input" || events[1].Source.Mode != "imported" {
 		t.Fatalf("protocol linkage changed imported evidence: %+v", events)
+	}
+	if verification := db.Verify(ctx, run.ID); !verification.Valid {
+		t.Fatalf("linked native run identity did not verify: %+v", verification)
 	}
 }
 

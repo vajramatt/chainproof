@@ -2,9 +2,11 @@ package store
 
 import (
 	"context"
+	"reflect"
 	"strings"
 	"testing"
 
+	"github.com/vajramatt/chainproof/internal/identity"
 	"github.com/vajramatt/chainproof/internal/proof"
 )
 
@@ -30,6 +32,37 @@ func TestLifecycleAndVerification(t *testing.T) {
 	v := s.Verify(ctx, r.ID)
 	if !v.Valid || v.EntryCount != 3 {
 		t.Fatalf("unexpected verification: %+v", v)
+	}
+}
+
+func TestAppendBindsRunAgentIdentityIntoEventChain(t *testing.T) {
+	s, err := Open(t.TempDir() + "/test.db")
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer s.Close()
+	ctx := context.Background()
+	profile, err := identity.Ensure(t.TempDir(), "builder", "Builder", "codex")
+	if err != nil {
+		t.Fatal(err)
+	}
+	attribution := identity.Extension(profile, "worker:"+strings.Repeat("a", 32), "")
+	run, err := s.Start(ctx, "Builder", "codex", "", map[string]any{identity.ExtensionKey: attribution})
+	if err != nil {
+		t.Fatal(err)
+	}
+	event, err := s.Append(ctx, run.ID, proof.EventInput{
+		Kind: "decision", Source: proof.Source{Adapter: "test", Mode: "reported"},
+		Extensions: map[string]any{identity.ExtensionKey: map[string]any{"agent_id": "spoofed"}},
+	})
+	if err != nil {
+		t.Fatal(err)
+	}
+	if !reflect.DeepEqual(event.Extensions[identity.ExtensionKey], attribution) {
+		t.Fatalf("event did not inherit run attribution: %+v", event.Extensions)
+	}
+	if verification := s.Verify(ctx, run.ID); !verification.Valid {
+		t.Fatalf("identity-bound run failed verification: %+v", verification)
 	}
 }
 func TestTamperingIsDetected(t *testing.T) {

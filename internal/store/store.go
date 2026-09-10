@@ -11,6 +11,7 @@ import (
 	"time"
 
 	"github.com/google/uuid"
+	"github.com/vajramatt/chainproof/internal/identity"
 	"github.com/vajramatt/chainproof/internal/proof"
 	_ "modernc.org/sqlite"
 )
@@ -124,6 +125,11 @@ func (s *Store) Append(ctx context.Context, runID string, input proof.EventInput
 	}
 	if event.Extensions == nil {
 		event.Extensions = map[string]any{}
+	}
+	if attribution, ok := run.Metadata[identity.ExtensionKey]; ok {
+		event.Extensions[identity.ExtensionKey] = attribution
+	} else {
+		delete(event.Extensions, identity.ExtensionKey)
 	}
 	hash, err := proof.Hash(event)
 	if err != nil {

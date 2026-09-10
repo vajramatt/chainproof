@@ -33,6 +33,10 @@ func TestMissionCLIStartsCheckpointsAndResumes(t *testing.T) {
 	if err := json.Unmarshal([]byte(runJSON), &agentRun); err != nil {
 		t.Fatal(err)
 	}
+	runIdentity, ok := agentRun.Metadata["chainproof.agent.v1"].(map[string]any)
+	if !ok || !strings.HasPrefix(stringValueForTest(runIdentity["worker_id"]), "worker:") {
+		t.Fatalf("manual run omitted worker identity: %+v", agentRun.Metadata)
+	}
 	if agentRun.Metadata["mission_id"] != mission.ID {
 		t.Fatalf("run not bound to mission: %+v", agentRun.Metadata)
 	}
@@ -74,6 +78,158 @@ func TestMissionCLIStartsCheckpointsAndResumes(t *testing.T) {
 	}
 	if mission.Status != "completed" {
 		t.Fatalf("mission not completed: %+v", mission)
+	}
+}
+
+func TestAgentEnsureWhoamiAndAutonomousAttribution(t *testing.T) {
+	dbPath := filepath.Join(t.TempDir(), "chainproof.db")
+	t.Setenv("CHAINPROOF_DB", dbPath)
+	t.Setenv("CHAINPROOF_CODEX_DISABLED", "1")
+	t.Setenv("CHAINPROOF_AGENT_PROFILE", "codex-main")
+
+	ensuredJSON := captureStdout(t, func() error {
+		return run([]string{"agent", "ensure", "--name", "Forge", "--harness", "codex"})
+	})
+	var ensured struct {
+		AgentID     string `json:"agent_id"`
+		DisplayName string `json:"display_name"`
+		Profile     string `json:"profile"`
+		PublicKey   string `json:"public_key"`
+	}
+	if err := json.Unmarshal([]byte(ensuredJSON), &ensured); err != nil {
+		t.Fatal(err)
+	}
+	if ensured.AgentID == "" || ensured.DisplayName != "Forge" || ensured.Profile != "codex-main" || ensured.PublicKey == "" || strings.Contains(ensuredJSON, "private") {
+		t.Fatalf("unexpected ensured identity: %s", ensuredJSON)
+	}
+	whoamiJSON := captureStdout(t, func() error { return run([]string{"whoami"}) })
+	if whoamiJSON != ensuredJSON {
+		t.Fatalf("whoami identity changed:\nensure: %s\nwhoami: %s", ensuredJSON, whoamiJSON)
+	}
+	renamedJSON := captureStdout(t, func() error {
+		return run([]string{"agent", "rename", "--name", "Forge Two"})
+	})
+	var renamed struct {
+		AgentID     string `json:"agent_id"`
+		DisplayName string `json:"display_name"`
+	}
+	if err := json.Unmarshal([]byte(renamedJSON), &renamed); err != nil {
+		t.Fatal(err)
+	}
+	if renamed.AgentID != ensured.AgentID || renamed.DisplayName != "Forge Two" {
+		t.Fatalf("rename changed durable identity: %s", renamedJSON)
+	}
+
+	missionJSON := captureStdout(t, func() error {
+		return run([]string{"mission", "start", "--objective", "Continue without human setup", "--role", "implementer"})
+	})
+	var mission continuity.Mission
+	if err := json.Unmarshal([]byte(missionJSON), &mission); err != nil {
+		t.Fatal(err)
+	}
+	identity, ok := mission.Metadata["chainproof.agent.v1"].(map[string]any)
+	if mission.Agent != "Forge Two" || !ok || identity["agent_id"] != ensured.AgentID || identity["profile"] != "codex-main" || identity["role"] != "implementer" {
+		t.Fatalf("mission omitted durable agent identity: %+v", mission)
+	}
+
+	claimJSON := captureStdout(t, func() error {
+		return run([]string{"mission", "claim", mission.ID, "--ttl", "10m"})
+	})
+	var lease continuity.MissionLease
+	if err := json.Unmarshal([]byte(claimJSON), &lease); err != nil {
+		t.Fatal(err)
+	}
+	if lease.Holder != ensured.AgentID {
+		t.Fatalf("default lease holder = %q, want stable identity %q", lease.Holder, ensured.AgentID)
+	}
+}
+
+func TestMissionExplicitAgentAndHolderRemainSupported(t *testing.T) {
+	t.Setenv("CHAINPROOF_DB", filepath.Join(t.TempDir(), "chainproof.db"))
+	t.Setenv("CHAINPROOF_CODEX_DISABLED", "1")
+	missionJSON := captureStdout(t, func() error {
+		return run([]string{"mission", "start", "--agent", "legacy-builder", "--objective", "Keep compatibility"})
+	})
+	var mission continuity.Mission
+	if err := json.Unmarshal([]byte(missionJSON), &mission); err != nil {
+		t.Fatal(err)
+	}
+	claimJSON := captureStdout(t, func() error {
+		return run([]string{"mission", "claim", mission.ID, "--holder", "explicit-worker"})
+	})
+	var lease continuity.MissionLease
+	if err := json.Unmarshal([]byte(claimJSON), &lease); err != nil {
+		t.Fatal(err)
+	}
+	if mission.Agent != "legacy-builder" || lease.Holder != "explicit-worker" {
+		t.Fatalf("explicit attribution changed: mission=%+v lease=%+v", mission, lease)
+	}
+}
+
+func TestWhoamiDoesNotRequireHealthyLedger(t *testing.T) {
+	dbPath := filepath.Join(t.TempDir(), "chainproof.db")
+	if err := os.WriteFile(dbPath, []byte("not a sqlite database"), 0600); err != nil {
+		t.Fatal(err)
+	}
+	t.Setenv("CHAINPROOF_DB", dbPath)
+	identityJSON := captureStdout(t, func() error { return run([]string{"whoami"}) })
+	var profile struct {
+		AgentID string `json:"agent_id"`
+	}
+	if err := json.Unmarshal([]byte(identityJSON), &profile); err != nil {
+		t.Fatal(err)
+	}
+	if profile.AgentID == "" {
+		t.Fatalf("identity unavailable without ledger: %s", identityJSON)
+	}
+}
+
+func TestMultipleProfilesShareLedgerWithoutSharingIdentity(t *testing.T) {
+	t.Setenv("CHAINPROOF_DB", filepath.Join(t.TempDir(), "chainproof.db"))
+	t.Setenv("CHAINPROOF_CODEX_DISABLED", "1")
+	t.Setenv("CHAINPROOF_AGENT_PROFILE", "agent-a")
+	firstJSON := captureStdout(t, func() error { return run([]string{"whoami"}) })
+	var first struct {
+		AgentID string `json:"agent_id"`
+	}
+	if err := json.Unmarshal([]byte(firstJSON), &first); err != nil {
+		t.Fatal(err)
+	}
+	missionJSON := captureStdout(t, func() error {
+		return run([]string{"mission", "start", "--objective", "Shared local work"})
+	})
+	var mission continuity.Mission
+	if err := json.Unmarshal([]byte(missionJSON), &mission); err != nil {
+		t.Fatal(err)
+	}
+	firstLeaseJSON := captureStdout(t, func() error {
+		return run([]string{"mission", "claim", mission.ID})
+	})
+	var firstLease continuity.MissionLease
+	if err := json.Unmarshal([]byte(firstLeaseJSON), &firstLease); err != nil {
+		t.Fatal(err)
+	}
+	captureStdout(t, func() error {
+		return run([]string{"mission", "release", mission.ID, firstLease.LeaseID})
+	})
+
+	t.Setenv("CHAINPROOF_AGENT_PROFILE", "agent-b")
+	secondJSON := captureStdout(t, func() error { return run([]string{"whoami"}) })
+	var second struct {
+		AgentID string `json:"agent_id"`
+	}
+	if err := json.Unmarshal([]byte(secondJSON), &second); err != nil {
+		t.Fatal(err)
+	}
+	secondLeaseJSON := captureStdout(t, func() error {
+		return run([]string{"mission", "claim", mission.ID})
+	})
+	var secondLease continuity.MissionLease
+	if err := json.Unmarshal([]byte(secondLeaseJSON), &secondLease); err != nil {
+		t.Fatal(err)
+	}
+	if first.AgentID == second.AgentID || firstLease.Holder != first.AgentID || secondLease.Holder != second.AgentID {
+		t.Fatalf("profiles did not retain distinct attribution: first=%+v second=%+v", firstLease, secondLease)
 	}
 }
 
@@ -221,6 +377,7 @@ func TestRecoveryCLIInspectsAcceptsAndRejectsUncheckpointedWork(t *testing.T) {
 func TestCheckpointCurrentUsesWrappedAgentEnvironment(t *testing.T) {
 	t.Setenv("CHAINPROOF_DB", filepath.Join(t.TempDir(), "chainproof.db"))
 	t.Setenv("CHAINPROOF_CODEX_DISABLED", "1")
+	t.Setenv("CHAINPROOF_AGENT_PROFILE", "checkpoint-agent")
 	missionJSON := captureStdout(t, func() error {
 		return run([]string{"mission", "start", "--agent", "builder", "--objective", "Checkpoint current work"})
 	})
@@ -233,6 +390,10 @@ func TestCheckpointCurrentUsesWrappedAgentEnvironment(t *testing.T) {
 	if err := json.Unmarshal([]byte(runJSON), &agentRun); err != nil {
 		t.Fatal(err)
 	}
+	runIdentity, ok := agentRun.Metadata["chainproof.agent.v1"].(map[string]any)
+	if !ok || !strings.HasPrefix(stringValueForTest(runIdentity["worker_id"]), "worker:") {
+		t.Fatalf("manual run omitted worker identity: %+v", agentRun.Metadata)
+	}
 	t.Setenv("CHAINPROOF_MISSION_ID", mission.ID)
 	t.Setenv("CHAINPROOF_RUN_ID", agentRun.ID)
 	checkpointJSON := captureStdout(t, func() error {
@@ -244,6 +405,10 @@ func TestCheckpointCurrentUsesWrappedAgentEnvironment(t *testing.T) {
 	}
 	if checkpoint.MissionID != mission.ID || checkpoint.Run.RunID != agentRun.ID || checkpoint.Summary != "Current agent state saved" {
 		t.Fatalf("checkpoint ignored wrapped agent environment: %+v", checkpoint)
+	}
+	identity, ok := checkpoint.Extensions["chainproof.agent.v1"].(map[string]any)
+	if !ok || identity["agent_id"] == "" || identity["profile"] != "checkpoint-agent" || identity["worker_id"] != runIdentity["worker_id"] {
+		t.Fatalf("checkpoint omitted current agent identity: %+v", checkpoint.Extensions)
 	}
 }
 
@@ -397,7 +562,7 @@ func TestWrappedCommandProvidesEphemeralAgentContext(t *testing.T) {
 	t.Setenv("CHAINPROOF_DB", filepath.Join(t.TempDir(), "chainproof.db"))
 	t.Setenv("CHAINPROOF_CODEX_DISABLED", "1")
 	missionJSON := captureStdout(t, func() error {
-		return run([]string{"mission", "start", "--agent", "durable-agent", "--objective", "Carry context into harness"})
+		return run([]string{"mission", "start", "--agent", "durable-agent", "--objective", "Carry context into harness", "--role", "reviewer"})
 	})
 	var mission continuity.Mission
 	if err := json.Unmarshal([]byte(missionJSON), &mission); err != nil {
@@ -412,12 +577,26 @@ func TestWrappedCommandProvidesEphemeralAgentContext(t *testing.T) {
 		RunID          string `json:"run_id"`
 		ContextFile    string `json:"context_file"`
 		ContextMission string `json:"context_mission"`
+		AgentID        string `json:"agent_id"`
+		AgentName      string `json:"agent_name"`
+		AgentProfile   string `json:"agent_profile"`
+		AgentRole      string `json:"agent_role"`
+		WorkerID       string `json:"worker_id"`
 	}
 	if err := json.Unmarshal([]byte(childJSON), &child); err != nil {
 		t.Fatal(err)
 	}
-	if child.MissionID != mission.ID || child.RunID == "" || child.ContextFile == "" || child.ContextMission != mission.ID {
+	if child.MissionID != mission.ID || child.RunID == "" || child.ContextFile == "" || child.ContextMission != mission.ID || !strings.HasPrefix(child.AgentID, "agent:ed25519:") || child.AgentName == "" || child.AgentProfile != "default" || child.AgentRole != "reviewer" || !strings.HasPrefix(child.WorkerID, "worker:") {
 		t.Fatalf("wrapper did not provide agent work context: %+v", child)
+	}
+	runsJSON := captureStdout(t, func() error { return run([]string{"list"}) })
+	var runs []proof.Run
+	if err := json.Unmarshal([]byte(runsJSON), &runs); err != nil {
+		t.Fatal(err)
+	}
+	identity, ok := runs[0].Metadata["chainproof.agent.v1"].(map[string]any)
+	if !ok || identity["agent_id"] != child.AgentID || identity["worker_id"] != child.WorkerID || identity["role"] != "reviewer" {
+		t.Fatalf("wrapped run metadata omitted worker identity: %+v", runs[0].Metadata)
 	}
 	if _, err := os.Stat(child.ContextFile); !errors.Is(err, os.ErrNotExist) {
 		t.Fatalf("ephemeral context file remained after command: %v", err)
@@ -439,6 +618,9 @@ func TestWrappedCommandEnvironmentHelper(t *testing.T) {
 	if err := json.NewEncoder(os.Stdout).Encode(map[string]string{
 		"mission_id": os.Getenv("CHAINPROOF_MISSION_ID"), "run_id": os.Getenv("CHAINPROOF_RUN_ID"),
 		"context_file": contextPath, "context_mission": contextMission,
+		"agent_id": os.Getenv("CHAINPROOF_AGENT_ID"), "agent_name": os.Getenv("CHAINPROOF_AGENT_NAME"),
+		"agent_profile": os.Getenv("CHAINPROOF_AGENT_PROFILE"), "agent_role": os.Getenv("CHAINPROOF_AGENT_ROLE"),
+		"worker_id": os.Getenv("CHAINPROOF_WORKER_ID"),
 	}); err != nil {
 		os.Exit(2)
 	}
@@ -468,11 +650,13 @@ func TestCodexWorkStartsMissionAwareCodex(t *testing.T) {
 		ContextLeaseID     string `json:"context_lease_id"`
 		ContextLeaseHolder string `json:"context_lease_holder"`
 		Prompt             string `json:"prompt"`
+		AgentID            string `json:"agent_id"`
+		WorkerID           string `json:"worker_id"`
 	}
 	if err := json.Unmarshal([]byte(childJSON), &child); err != nil {
 		t.Fatal(err)
 	}
-	if child.MissionID != mission.ID || child.RunID == "" || child.LeaseID == "" || child.ContextMission != mission.ID || child.ContextLeaseID != child.LeaseID || child.ContextLeaseHolder != "codex-worker" {
+	if child.MissionID != mission.ID || child.RunID == "" || child.LeaseID == "" || child.ContextMission != mission.ID || child.ContextLeaseID != child.LeaseID || child.ContextLeaseHolder != "codex-worker" || child.AgentID == "" || child.WorkerID == "" {
 		t.Fatalf("Codex did not receive mission environment: %+v", child)
 	}
 	marker := `CHAINPROOF_AGENT_WORK_V1 {"mission_id":"` + mission.ID + `","parent_run_id":"` + child.RunID + `"}`
@@ -578,6 +762,8 @@ func TestCodexWorkEnvironmentHelper(t *testing.T) {
 		"context_mission":      contextMission,
 		"context_lease_id":     contextLeaseID,
 		"context_lease_holder": contextLeaseHolder,
+		"agent_id":             os.Getenv("CHAINPROOF_AGENT_ID"),
+		"worker_id":            os.Getenv("CHAINPROOF_WORKER_ID"),
 		"prompt":               prompt,
 	}); err != nil {
 		os.Exit(2)
@@ -664,4 +850,9 @@ func captureStdout(t *testing.T, action func() error) string {
 		t.Fatal(actionErr)
 	}
 	return string(body)
+}
+
+func stringValueForTest(value any) string {
+	text, _ := value.(string)
+	return text
 }

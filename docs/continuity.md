@@ -9,9 +9,25 @@ proofs and carries compact resumable state.
 
 ```sh
 chainproof mission start \
-  --agent builder \
+  --role implementer \
   --objective "Ship durable continuity"
 ```
+
+On the first agent-aware command, ChainProof creates the selected local profile.
+An agent can do this explicitly and inspect its public identity:
+
+```sh
+chainproof agent ensure --profile builder --name Builder --harness codex
+CHAINPROOF_AGENT_PROFILE=builder chainproof whoami
+CHAINPROOF_AGENT_PROFILE=builder chainproof agent rename --name Builder-2
+```
+
+The profile contains a stable key-derived `agent_id` and readable
+`display_name`. Rename changes the display name without changing the key or
+stable ID; prior ledger records preserve the name recorded when written.
+`CHAINPROOF_AGENT_PROFILE` selects among agents sharing one database. A new
+`worker_id` identifies each run session. `role` is attached to work within a
+mission, not permanently stored as profile identity.
 
 Save the returned `mission_id`. A mission persists until explicitly completed.
 `chainproof resume` without an ID selects the most recently updated active
@@ -21,7 +37,7 @@ Discover existing work without retaining IDs outside ChainProof:
 
 ```sh
 chainproof mission list --status active
-chainproof mission acquire --holder worker-a --ttl 30m --max-evidence 20
+chainproof mission acquire --ttl 30m --max-evidence 20
 ```
 
 Acquisition atomically selects oldest available active mission, verifies its
@@ -35,7 +51,7 @@ stops acquisition without leaving a lease.
 Acquire an expiring lease before assigning one mission to a worker:
 
 ```sh
-chainproof mission claim MISSION_ID --holder worker-a --ttl 30m
+chainproof mission claim MISSION_ID --ttl 30m
 chainproof mission lease MISSION_ID --history
 ```
 
@@ -55,7 +71,8 @@ database repair. TTL must be between one second and 24 hours.
 Lease transitions are retained as append-only local coordination history.
 They are not hashed, exported in continuity bundles, or treated as agent
 identity proof. Checkpoints and anchored run prefixes remain the cryptographic
-continuity boundary.
+continuity boundary. Omitted holders default to current stable `agent_id`;
+explicit holder strings remain available for external schedulers.
 
 `chainproof context` includes latest lease plus `lease_active`, allowing agent
 harnesses to reject conflicting work before acting. v1 uses local wall-clock
@@ -94,8 +111,10 @@ With `--acquire`, runner atomically selects and claims next available verified
 mission instead of choosing a mission before lease acquisition. `--mission`
 and `--acquire` are mutually exclusive.
 
-Wrapped processes receive `CHAINPROOF_MISSION_ID`, `CHAINPROOF_RUN_ID`, and
-`CHAINPROOF_CONTEXT_FILE`. The context path points to a mode-`0600` JSON file
+Wrapped processes receive `CHAINPROOF_MISSION_ID`, `CHAINPROOF_RUN_ID`,
+`CHAINPROOF_CONTEXT_FILE`, `CHAINPROOF_AGENT_ID`, `CHAINPROOF_AGENT_NAME`,
+`CHAINPROOF_AGENT_PROFILE`, `CHAINPROOF_AGENT_ROLE`, and
+`CHAINPROOF_WORKER_ID`. The context path points to a mode-`0600` JSON file
 containing verified bounded mission context. ChainProof removes it when the
 wrapper returns after child exit; forced wrapper termination can leave it in
 the operating system temporary directory. Harness integrations read this file
@@ -104,15 +123,23 @@ mission automatically and `chainproof checkpoint --current` writes against the
 environment mission and run. See [Agent Work Protocol
 v1](../spec/agent-work-v1.md).
 
-The mission's agent name is inherited unless `--agent` explicitly overrides
-it. Run metadata records `mission_id`; provenance events keep their existing v1
-shape and proof semantics.
+The mission agent name is inherited unless `--agent` explicitly overrides it.
+Run metadata records `mission_id` plus `chainproof.agent.v1`; provenance events
+keep their existing v1 shape and carry same attribution in hashed extensions.
+Run verification rejects missing or mismatched identity binding.
+
+The profile private key and public profile use owner-only mode `0600` under
+`~/.chainproof/agents/PROFILE/` by default. `agent_id` is the SHA-256
+fingerprint of the Ed25519 public key. v1 does not yet sign run or checkpoint
+content, so this is durable local attribution, not authentication or proof of
+key possession.
 
 Native Codex work produces two linked records with different proof boundaries:
 an `observed` execution-envelope run from the ChainProof wrapper and an
 `imported` native-session run from Codex's local JSONL. The collector only
 accepts the linkage marker when its parent run exists, uses the Codex harness,
-and belongs to the same mission. Neither record upgrades imported claims to
+and belongs to the same mission. The validated child run inherits the parent's
+`chainproof.agent.v1` attribution. Neither record upgrades imported claims to
 observed evidence.
 
 Observed wrapper-run metadata records `lease_id` and `lease_holder`, connecting

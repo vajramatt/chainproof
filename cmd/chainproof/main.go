@@ -20,6 +20,7 @@ import (
 
 	codexadapter "github.com/vajramatt/chainproof/internal/adapters/codex"
 	"github.com/vajramatt/chainproof/internal/continuity"
+	"github.com/vajramatt/chainproof/internal/identity"
 	"github.com/vajramatt/chainproof/internal/proof"
 	"github.com/vajramatt/chainproof/internal/server"
 	"github.com/vajramatt/chainproof/internal/service"
@@ -99,6 +100,18 @@ func run(args []string) error {
 	if e := os.MkdirAll(filepath.Dir(dbPath), 0700); e != nil {
 		return e
 	}
+	if args[0] == "agent" {
+		return manageAgent(dbPath, args[1:])
+	}
+	if args[0] == "whoami" {
+		fs := flag.NewFlagSet("whoami", flag.ContinueOnError)
+		profileName := fs.String("profile", selectedAgentProfile(), "")
+		if e := fs.Parse(args[1:]); e != nil {
+			return e
+		}
+		profile, ensureErr := identity.Ensure(agentRoot(dbPath), *profileName, "", "")
+		return output(profile, ensureErr)
+	}
 	db, e := store.Open(dbPath)
 	if e != nil {
 		return e
@@ -116,12 +129,25 @@ func run(args []string) error {
 		switch args[1] {
 		case "start":
 			fs := flag.NewFlagSet("mission start", flag.ContinueOnError)
-			agent := fs.String("agent", "unknown-agent", "")
+			agent := fs.String("agent", "", "")
 			objective := fs.String("objective", "", "")
+			role := fs.String("role", strings.TrimSpace(os.Getenv("CHAINPROOF_AGENT_ROLE")), "")
 			if e = fs.Parse(args[2:]); e != nil {
 				return e
 			}
-			mission, startErr := db.StartMission(ctx, continuity.MissionInput{Agent: *agent, Objective: *objective})
+			if e = identity.ValidateRole(*role); e != nil {
+				return e
+			}
+			profile, profileErr := ensureCurrentAgent(dbPath, "")
+			if profileErr != nil {
+				return profileErr
+			}
+			selectedAgent := strings.TrimSpace(*agent)
+			if selectedAgent == "" {
+				selectedAgent = profile.DisplayName
+			}
+			metadata := map[string]any{identity.ExtensionKey: identity.Extension(profile, "", *role)}
+			mission, startErr := db.StartMission(ctx, continuity.MissionInput{Agent: selectedAgent, Objective: *objective, Metadata: metadata})
 			return output(mission, startErr)
 		case "complete":
 			if len(args) < 3 {
@@ -168,6 +194,13 @@ func run(args []string) error {
 			if e = fs.Parse(args[3:]); e != nil {
 				return e
 			}
+			if strings.TrimSpace(*holder) == "" {
+				profile, profileErr := ensureCurrentAgent(dbPath, "")
+				if profileErr != nil {
+					return profileErr
+				}
+				*holder = profile.AgentID
+			}
 			lease, claimErr := db.ClaimMission(ctx, args[2], continuity.LeaseInput{Holder: *holder, TTL: *ttl})
 			return output(lease, claimErr)
 		case "acquire":
@@ -177,6 +210,13 @@ func run(args []string) error {
 			maxEvidence := fs.Int("max-evidence", 20, "")
 			if e = fs.Parse(args[2:]); e != nil {
 				return e
+			}
+			if strings.TrimSpace(*holder) == "" {
+				profile, profileErr := ensureCurrentAgent(dbPath, "")
+				if profileErr != nil {
+					return profileErr
+				}
+				*holder = profile.AgentID
 			}
 			acquisition, acquireErr := db.AcquireMission(ctx, continuity.LeaseInput{Holder: *holder, TTL: *ttl}, *maxEvidence)
 			return output(acquisition, acquireErr)
@@ -240,10 +280,18 @@ func run(args []string) error {
 		harness := fs.String("harness", "", "")
 		model := fs.String("model", "", "")
 		missionID := fs.String("mission", "", "")
+		role := fs.String("role", strings.TrimSpace(os.Getenv("CHAINPROOF_AGENT_ROLE")), "")
 		if e = fs.Parse(args[1:]); e != nil {
 			return e
 		}
+		if e = identity.ValidateRole(*role); e != nil {
+			return e
+		}
 		metadata := map[string]any{}
+		profile, profileErr := ensureCurrentAgent(dbPath, *harness)
+		if profileErr != nil {
+			return profileErr
+		}
 		selectedAgent := strings.TrimSpace(*agent)
 		if *missionID != "" {
 			mission, missionErr := db.Mission(ctx, *missionID)
@@ -257,10 +305,18 @@ func run(args []string) error {
 				return fmt.Errorf("mission is %s", mission.Status)
 			}
 			metadata["mission_id"] = *missionID
+			if strings.TrimSpace(*role) == "" {
+				*role = missionRoleFor(profile, mission.Metadata)
+			}
 		}
 		if selectedAgent == "" {
-			selectedAgent = "unknown-agent"
+			selectedAgent = profile.DisplayName
 		}
+		workerID, workerErr := identity.NewWorkerID()
+		if workerErr != nil {
+			return workerErr
+		}
+		metadata[identity.ExtensionKey] = identity.Extension(profile, workerID, *role)
 		r, e := db.Start(ctx, selectedAgent, *harness, *model, metadata)
 		return output(r, e)
 	case "append":
@@ -377,6 +433,31 @@ func run(args []string) error {
 		if e = json.Unmarshal([]byte(raw), &input); e != nil {
 			return e
 		}
+		profile, profileErr := ensureCurrentAgent(dbPath, "")
+		if profileErr != nil {
+			return profileErr
+		}
+		workerID := strings.TrimSpace(os.Getenv("CHAINPROOF_WORKER_ID"))
+		role := strings.TrimSpace(os.Getenv("CHAINPROOF_AGENT_ROLE"))
+		anchoredRun, runErr := db.Run(ctx, runID)
+		if runErr != nil {
+			return runErr
+		}
+		if runIdentity, ok := anchoredRun.Metadata[identity.ExtensionKey].(map[string]any); ok && runIdentity["agent_id"] == profile.AgentID {
+			if workerID == "" {
+				workerID, _ = runIdentity["worker_id"].(string)
+			}
+			if role == "" {
+				role, _ = runIdentity["role"].(string)
+			}
+		}
+		if e = identity.ValidateRole(role); e != nil {
+			return e
+		}
+		if input.Extensions == nil {
+			input.Extensions = map[string]any{}
+		}
+		input.Extensions[identity.ExtensionKey] = identity.Extension(profile, workerID, role)
 		checkpoint, checkpointErr := db.CreateCheckpoint(ctx, missionID, runID, input)
 		return output(checkpoint, checkpointErr)
 	case "resume":
@@ -481,7 +562,7 @@ func run(args []string) error {
 			return errors.New("usage: chainproof codex sync|watch|work")
 		}
 		if args[1] == "work" {
-			return runCodexWork(ctx, db, args[2:])
+			return runCodexWork(ctx, db, dbPath, args[2:])
 		}
 		collector, collectorErr := newCodexCollector(db)
 		if collectorErr != nil {
@@ -515,6 +596,7 @@ func run(args []string) error {
 		}
 		fs := flag.NewFlagSet("run", flag.ContinueOnError)
 		missionID := fs.String("mission", "", "")
+		role := fs.String("role", strings.TrimSpace(os.Getenv("CHAINPROOF_AGENT_ROLE")), "")
 		if e = fs.Parse(args[1:]); e != nil {
 			return e
 		}
@@ -522,10 +604,11 @@ func run(args []string) error {
 		if len(command) == 0 {
 			return errors.New("usage: chainproof run [--mission ID] -- COMMAND [ARGS...]")
 		}
-		return runWrappedCommand(ctx, db, wrappedCommand{
+		return runWrappedCommand(ctx, db, dbPath, wrappedCommand{
 			MissionID: *missionID,
 			Agent:     filepath.Base(command[0]),
 			Harness:   filepath.Base(command[0]),
+			Role:      *role,
 			Metadata:  map[string]any{"command": command},
 			Build:     func(string) []string { return command },
 		})
@@ -538,18 +621,77 @@ type wrappedCommand struct {
 	MissionID string
 	Agent     string
 	Harness   string
+	Role      string
 	Metadata  map[string]any
 	Env       map[string]string
 	Build     func(runID string) []string
 }
 
-func runCodexWork(ctx context.Context, db *store.Store, args []string) error {
+func selectedAgentProfile() string {
+	name := strings.TrimSpace(os.Getenv("CHAINPROOF_AGENT_PROFILE"))
+	if name == "" {
+		return "default"
+	}
+	return name
+}
+
+func manageAgent(dbPath string, args []string) error {
+	if len(args) < 1 {
+		return errors.New("usage: chainproof agent ensure|rename")
+	}
+	switch args[0] {
+	case "ensure":
+		fs := flag.NewFlagSet("agent ensure", flag.ContinueOnError)
+		profileName := fs.String("profile", selectedAgentProfile(), "")
+		displayName := fs.String("name", "", "")
+		harness := fs.String("harness", "", "")
+		if err := fs.Parse(args[1:]); err != nil {
+			return err
+		}
+		profile, err := identity.Ensure(agentRoot(dbPath), *profileName, *displayName, *harness)
+		return output(profile, err)
+	case "rename":
+		fs := flag.NewFlagSet("agent rename", flag.ContinueOnError)
+		profileName := fs.String("profile", selectedAgentProfile(), "")
+		displayName := fs.String("name", "", "")
+		if err := fs.Parse(args[1:]); err != nil {
+			return err
+		}
+		profile, err := identity.Rename(agentRoot(dbPath), *profileName, *displayName)
+		return output(profile, err)
+	default:
+		return errors.New("usage: chainproof agent ensure|rename")
+	}
+}
+
+func agentRoot(dbPath string) string {
+	if root := strings.TrimSpace(os.Getenv("CHAINPROOF_AGENT_HOME")); root != "" {
+		return root
+	}
+	return filepath.Join(filepath.Dir(dbPath), "agents")
+}
+
+func ensureCurrentAgent(dbPath, harness string) (identity.Profile, error) {
+	return identity.Ensure(agentRoot(dbPath), selectedAgentProfile(), "", harness)
+}
+
+func missionRoleFor(profile identity.Profile, metadata map[string]any) string {
+	extension, ok := metadata[identity.ExtensionKey].(map[string]any)
+	if !ok || extension["agent_id"] != profile.AgentID {
+		return ""
+	}
+	role, _ := extension["role"].(string)
+	return strings.TrimSpace(role)
+}
+
+func runCodexWork(ctx context.Context, db *store.Store, dbPath string, args []string) error {
 	fs := flag.NewFlagSet("codex work", flag.ContinueOnError)
 	missionID := fs.String("mission", "", "")
 	acquire := fs.Bool("acquire", false, "")
 	execMode := fs.Bool("exec", false, "")
 	prompt := fs.String("prompt", "", "")
 	holder := fs.String("holder", "", "")
+	role := fs.String("role", strings.TrimSpace(os.Getenv("CHAINPROOF_AGENT_ROLE")), "")
 	leaseTTL := fs.Duration("lease-ttl", 30*time.Minute, "")
 	if err := fs.Parse(args); err != nil {
 		return err
@@ -557,12 +699,15 @@ func runCodexWork(ctx context.Context, db *store.Store, args []string) error {
 	if *acquire && *missionID != "" {
 		return errors.New("--mission and --acquire cannot be combined")
 	}
+	profile, err := ensureCurrentAgent(dbPath, "codex")
+	if err != nil {
+		return err
+	}
 	var mission continuity.Mission
 	var lease continuity.MissionLease
-	var err error
 	if *acquire {
 		if strings.TrimSpace(*holder) == "" {
-			*holder = "codex"
+			*holder = profile.AgentID
 		}
 		acquisition, acquireErr := db.AcquireMission(ctx, continuity.LeaseInput{Holder: *holder, TTL: *leaseTTL}, 20)
 		if acquireErr != nil {
@@ -588,7 +733,7 @@ func runCodexWork(ctx context.Context, db *store.Store, args []string) error {
 			return err
 		}
 		if strings.TrimSpace(*holder) == "" {
-			*holder = mission.Agent
+			*holder = profile.AgentID
 		}
 		lease, err = db.ClaimMission(ctx, mission.ID, continuity.LeaseInput{Holder: *holder, TTL: *leaseTTL})
 		if err != nil {
@@ -611,10 +756,11 @@ func runCodexWork(ctx context.Context, db *store.Store, args []string) error {
 		defer ticker.Stop()
 		renewalDone <- renewMissionLease(leaseCtx, db, mission.ID, lease.LeaseID, *leaseTTL, ticker.C)
 	}()
-	commandErr := runWrappedCommand(ctx, db, wrappedCommand{
+	commandErr := runWrappedCommand(ctx, db, dbPath, wrappedCommand{
 		MissionID: *missionID,
 		Agent:     "codex",
 		Harness:   "codex",
+		Role:      *role,
 		Metadata: map[string]any{
 			"integration": "codex-work-v1", "mode": mode,
 			"lease_id": lease.LeaseID, "lease_holder": lease.Holder,
@@ -677,12 +823,21 @@ func codexWorkPrompt(missionID, runID, direction string) string {
 	return prompt
 }
 
-func runWrappedCommand(ctx context.Context, db *store.Store, spec wrappedCommand) error {
+func runWrappedCommand(ctx context.Context, db *store.Store, dbPath string, spec wrappedCommand) error {
 	agent := spec.Agent
 	metadata := map[string]any{}
 	for key, value := range spec.Metadata {
 		metadata[key] = value
 	}
+	profile, err := ensureCurrentAgent(dbPath, spec.Harness)
+	if err != nil {
+		return err
+	}
+	workerID, err := identity.NewWorkerID()
+	if err != nil {
+		return err
+	}
+	role := strings.TrimSpace(spec.Role)
 	contextFile := ""
 	if spec.MissionID != "" {
 		mission, err := db.Mission(ctx, spec.MissionID)
@@ -694,6 +849,9 @@ func runWrappedCommand(ctx context.Context, db *store.Store, spec wrappedCommand
 		}
 		agent = mission.Agent
 		metadata["mission_id"] = mission.ID
+		if role == "" {
+			role = missionRoleFor(profile, mission.Metadata)
+		}
 		compiled, err := db.BuildMissionContext(ctx, mission.ID, 20)
 		if err != nil {
 			return err
@@ -704,6 +862,10 @@ func runWrappedCommand(ctx context.Context, db *store.Store, spec wrappedCommand
 		}
 		defer os.Remove(contextFile)
 	}
+	if err = identity.ValidateRole(role); err != nil {
+		return err
+	}
+	metadata[identity.ExtensionKey] = identity.Extension(profile, workerID, role)
 	r, err := db.Start(ctx, agent, spec.Harness, "", metadata)
 	if err != nil {
 		return err
@@ -716,7 +878,16 @@ func runWrappedCommand(ctx context.Context, db *store.Store, spec wrappedCommand
 		return err
 	}
 	cmd := exec.Command(command[0], command[1:]...)
-	cmd.Env = append(os.Environ(), "CHAINPROOF_RUN_ID="+r.ID, "CHAINPROOF_MISSION_ID="+spec.MissionID, "CHAINPROOF_CONTEXT_FILE="+contextFile)
+	cmd.Env = append(os.Environ(),
+		"CHAINPROOF_RUN_ID="+r.ID,
+		"CHAINPROOF_MISSION_ID="+spec.MissionID,
+		"CHAINPROOF_CONTEXT_FILE="+contextFile,
+		"CHAINPROOF_AGENT_ID="+profile.AgentID,
+		"CHAINPROOF_AGENT_NAME="+profile.DisplayName,
+		"CHAINPROOF_AGENT_PROFILE="+profile.Profile,
+		"CHAINPROOF_AGENT_ROLE="+role,
+		"CHAINPROOF_WORKER_ID="+workerID,
+	)
 	for key, value := range spec.Env {
 		cmd.Env = append(cmd.Env, key+"="+value)
 	}
@@ -856,31 +1027,38 @@ func manageService(args []string) error {
 const usage = `ChainProof — durable continuity and provenance for AI agents
 
 Usage:
+  chainproof init                            Initialize local state
+  chainproof agent ensure [--profile NAME] [--name NAME] [--harness NAME]
+                                              Create or load stable local identity
+  chainproof agent rename --name NAME [--profile NAME]
+                                              Change display name, keep stable ID
+  chainproof whoami [--profile NAME]         Print current public agent identity
   chainproof ui                              Open the terminal interface
   chainproof serve [127.0.0.1:7331]         Run local API and web dashboard
   chainproof daemon                         Run collector/API in foreground
   chainproof service install                Install and start the user service
   chainproof service status                 Inspect the user service
-  chainproof mission start --agent A --objective O
+  chainproof mission start [--agent A] [--role R] --objective O
                                               Start durable work across sessions
   chainproof mission list [--status active|completed] [--limit N]
                                               Discover durable missions
-  chainproof mission acquire --holder H [--ttl 30m] [--max-evidence N]
+  chainproof mission acquire [--holder H] [--ttl 30m] [--max-evidence N]
                                               Atomically claim available verified work
   chainproof mission complete MISSION_ID      Close after a valid checkpoint
   chainproof mission export MISSION_ID [FILE] Export portable continuity proof
-  chainproof mission claim MISSION_ID --holder H [--ttl 30m]
+  chainproof mission claim MISSION_ID [--holder H] [--ttl 30m]
                                               Atomically claim active mission
   chainproof mission lease MISSION_ID [--history]
                                               Inspect current lease and history
   chainproof mission renew MISSION_ID LEASE_ID [--ttl 30m]
   chainproof mission handoff MISSION_ID LEASE_ID --to H [--ttl 30m]
   chainproof mission release MISSION_ID LEASE_ID
-  chainproof start [--agent A --harness H --model M --mission ID]
+  chainproof start [--agent A --harness H --model M --mission ID --role R]
   chainproof append RUN_ID [JSON]            Append one reported event
   chainproof ingest RUN_ID < events.jsonl    Import a JSONL stream
   chainproof pull RUN_ID FILE [ADAPTER]      Pull new JSONL records by cursor
-  chainproof run [--mission ID] -- COMMAND   Wrap harness inside mission
+  chainproof run [--mission ID] [--role R] -- COMMAND
+                                              Wrap harness inside mission
   chainproof complete RUN_ID [STATUS]
   chainproof verify RUN_ID                   Verify the local ledger
   chainproof export RUN_ID [PROOF.json]      Export a portable proof
@@ -903,7 +1081,7 @@ Usage:
                                               Preserve prior state and reject tail
   chainproof codex sync                     Discover/import Codex sessions once
   chainproof codex watch                    Continuously follow Codex sessions
-  chainproof codex work [--mission ID | --acquire] [--holder H] [--lease-ttl 30m]
+  chainproof codex work [--mission ID | --acquire] [--holder H] [--role R] [--lease-ttl 30m]
                         [--exec] [--prompt TEXT] -- [CODEX_OPTIONS]
                                               Run Codex with verified mission context
   chainproof version

@@ -48,6 +48,8 @@ machine and the code is MIT licensed.
 Current `main` contains the agent-first continuity loop:
 
 - durable missions spanning multiple agent runs and model sessions
+- self-created, key-derived local agent profiles with stable IDs and ephemeral
+  worker IDs
 - append-only checkpoints anchored to exact verified run-proof prefixes
 - stable commitments, next actions, blockers, and cited evidence
 - bounded verified context for starting or resuming work
@@ -70,7 +72,7 @@ control plane:
 - deeper local web investigation across timelines, diffs, artifacts, failures,
   comparisons, and proof reports
 - durable remote-executor handoff and multi-host lease coordination
-- signed agent identity while preserving existing proof boundaries
+- signed agent attestations and key recovery while preserving existing proof boundaries
 
 Roadmap items are direction, not shipped claims or delivery commitments.
 
@@ -106,7 +108,8 @@ make build
 
 The installer verifies the release archive against its published SHA-256
 checksum. The database opens at `~/.chainproof/chainproof.db`; set
-`CHAINPROOF_DB` to put it somewhere else.
+`CHAINPROOF_DB` to put it somewhere else. Local agent profiles live beside the
+database under `agents/`.
 
 ## Open it
 
@@ -197,6 +200,36 @@ Wrapping records the process lifecycle and exit status as **observed**. It does
 not magically reveal internal tool calls or private model reasoning. A native
 hook, push integration, or pull adapter provides the richer event stream.
 
+## Give an agent durable identity
+
+An agent can create its own local identity without an account, server, or human
+registration step:
+
+```sh
+chainproof agent ensure --profile codex-main --name Forge --harness codex
+CHAINPROOF_AGENT_PROFILE=codex-main chainproof whoami
+CHAINPROOF_AGENT_PROFILE=codex-main chainproof agent rename --name Forge-2
+```
+
+`agent ensure` creates one owner-only Ed25519 key and public profile. `agent_id`
+is a stable SHA-256 fingerprint of the public key. `display_name` is readable
+presentation and can change without rotating identity; `profile` selects one
+local identity; `worker_id` is new for each run session; `role` describes work
+within one mission. Ordinary agent-aware commands auto-create the selected
+profile, so `chainproof whoami` also works on a fresh install. Use
+`CHAINPROOF_AGENT_PROFILE` when several agents share one ledger. Use
+`CHAINPROOF_AGENT_HOME` only when profile files must live somewhere other than
+beside the database.
+
+Identity data is recorded under `chainproof.agent.v1` in mission and run
+metadata plus hashed event and checkpoint extensions. Run verification checks
+that declared run attribution matches chain-bound event attribution and that
+`agent_id` fingerprints the declared public key. Current v1 does not sign those
+records or authenticate access. Anyone able to write local files or invoke the
+CLI as the same operating-system user can impersonate a profile. The private
+key establishes a stable identifier and supports future signed attestations;
+it is not ChainProof authentication.
+
 ## Continue across sessions
 
 A run records one bounded execution. A mission links runs into durable work.
@@ -205,9 +238,9 @@ stable commitments with acceptance criteria, and optional evidence references,
 then anchors that state to an exact run-proof prefix.
 
 ```sh
-chainproof mission start --agent builder --objective "Ship durable continuity"
+chainproof mission start --objective "Ship durable continuity" --role implementer
 chainproof mission list --status active
-chainproof mission acquire --holder worker-a --ttl 30m
+chainproof mission acquire --ttl 30m
 chainproof codex work --mission MISSION_ID
 chainproof checkpoint MISSION_ID RUN_ID '{
   "summary": "Storage and API tests pass",
@@ -224,11 +257,12 @@ chainproof resume MISSION_ID
 chainproof context --mission MISSION_ID --max-evidence 20
 ```
 
-Mission-wrapped commands receive an ephemeral verified context file plus
-mission and run IDs through environment variables. This gives every harness one
-stable bootstrap contract while leaving prompt injection and checkpoint writing
-to its integration. Wrapped agents can call `chainproof context` and
-`chainproof checkpoint --current` without copying identifiers. See
+Mission-wrapped commands receive an ephemeral verified context file, mission
+and run IDs, stable agent identity, mission role, and ephemeral worker identity
+through environment variables. This gives every harness one stable bootstrap
+contract while leaving prompt injection and checkpoint writing to its
+integration. Wrapped agents can call `chainproof context` and `chainproof
+checkpoint --current` without copying identifiers. See
 [`spec/agent-work-v1.md`](spec/agent-work-v1.md).
 
 `chainproof codex work` is the native Codex integration. It verifies and injects
@@ -270,8 +304,9 @@ chainproof mission release MISSION_ID LEASE_ID
 
 Lease transitions form append-only local coordination history. They are not
 part of continuity proof v1, do not establish cryptographic identity, and do
-not change checkpoint hashes. Expiry permits crash recovery without rewriting
-history.
+not change checkpoint hashes. When `--holder` is omitted, claims use current
+stable `agent_id`; an explicit holder remains supported. Expiry permits crash
+recovery without rewriting history.
 
 Wrapped Codex receives `CHAINPROOF_LEASE_ID` alongside mission, run, and
 context variables. It can transfer ownership before exit:
@@ -322,8 +357,9 @@ any associated run has uncheckpointed events; accept or reject every recovery
 tail first. Once completed, associated runs reject new appends so later work
 cannot silently appear beyond final checkpoint.
 
-Checkpoint integrity does not make a summary true. Agent identity is a local
-name in continuity v1, not a cryptographic signature. See
+Checkpoint integrity does not make a summary true. Key-derived agent IDs are
+attribution metadata in continuity v1, not cryptographic signatures over
+checkpoint content. See
 [`docs/continuity.md`](docs/continuity.md) for the workflow and
 [`spec/continuity-v1.md`](spec/continuity-v1.md) for the exact proof boundary.
 
@@ -548,6 +584,7 @@ The things ChainProof writes are its own:
 
 - `~/.chainproof/chainproof.db` — ledger, rebuildable search index, cursors, and artifacts
 - `~/.chainproof/chainproof.db-wal` — SQLite's write-ahead log while active
+- `~/.chainproof/agents/PROFILE/` — owner-only public profile and Ed25519 private key
 - `~/.chainproof/exports/` when you press `x` in the TUI
 - another export path only when you ask for one with `chainproof export`
 
@@ -557,6 +594,9 @@ It does not edit the repositories or harness histories it observes.
 
 | command | what |
 | --- | --- |
+| `chainproof agent ensure` | create or load stable local agent identity |
+| `chainproof agent rename` | change readable name without rotating stable ID |
+| `chainproof whoami` | print current public agent identity |
 | `chainproof` / `chainproof ui` | open the terminal interface |
 | `chainproof serve [address]` | run the local API and web dashboard |
 | `chainproof daemon` | run the collector and local API in the foreground |

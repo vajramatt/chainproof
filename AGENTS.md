@@ -34,6 +34,11 @@ formats, and release artifacts.
 - Keep Agent Work Protocol environment variables harness-neutral. Context files
   must be private, ephemeral, verified before child start, and treated as data
   rather than generic prompt text.
+- Keep local agent profiles owner-only and separate stable `agent_id`, readable
+  `display_name`, ephemeral `worker_id`, and mission-specific `role`. Never
+  describe unsigned attribution metadata as authentication or signed proof.
+- Bind declared run attribution to canonical event extensions and verify exact
+  metadata-to-event agreement without changing provenance mode.
 - Describe proof boundaries precisely: a valid hash chain proves that recorded
   evidence has not changed; it does not prove that a reported or imported claim
   was true.

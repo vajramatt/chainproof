@@ -24,8 +24,10 @@ chainproof codex work --holder WORKER --lease-ttl 30m --exec --prompt "Continue 
 
 ChainProof starts an observed Codex execution envelope, compiles verified
 mission context, and injects Agent Work Protocol instructions into the initial
-prompt. Codex receives the standard `CHAINPROOF_*` environment. The initial
-prompt tells it to read context before acting and write
+prompt. Codex receives mission/run/context variables plus stable agent ID,
+profile, readable name, mission role, ephemeral worker ID, and lease token in
+the `CHAINPROOF_*` environment. The initial prompt tells it to read context
+before acting and write
 `chainproof checkpoint --current` before ending.
 
 Before launch, native runner claims mission lease. It renews at half-TTL
@@ -37,10 +39,13 @@ holder for coordination lookup.
 The built-in collector later imports Codex's richer native session as a
 separate child run. Its `CHAINPROOF_AGENT_WORK_V1` marker is accepted only when
 the referenced parent run exists, uses the Codex harness, and belongs to the
-same mission. This links two honest provenance views: observed process
+same mission. The validated child inherits the parent's `chainproof.agent.v1`
+attribution. This links two honest provenance views: observed process
 lifecycle and imported native session detail.
 
-`--mission` defaults to the most recently updated active mission. Use
+`--mission` defaults to the most recently updated active mission. Omit
+`--holder` to use the current stable `agent_id`; explicit scheduler holder names
+remain supported. Use
 `CHAINPROOF_CODEX_BIN` when the executable is not named `codex`. Put Codex CLI
 options after `--`; use ChainProof's `--prompt` for additional user direction.
 
