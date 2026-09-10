@@ -27,6 +27,8 @@ formats, and release artifacts.
   successful mission and run-anchor verification.
 - Surface post-checkpoint run tails as uncheckpointed recovery metadata; never
   promote them into trusted resumable evidence automatically.
+- Do not complete missions with uncheckpointed run tails. Once mission is
+  completed, reject new appends to its associated runs.
 - Keep Agent Work Protocol environment variables harness-neutral. Context files
   must be private, ephemeral, verified before child start, and treated as data
   rather than generic prompt text.

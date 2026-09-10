@@ -250,6 +250,13 @@ chainproof mission complete MISSION_ID
 
 Completion requires at least one valid checkpoint. This prevents an empty
 mission from being marked complete without resumable or reviewable evidence.
+It also requires every associated run to have no events beyond its latest
+checkpoint anchor. Use recovery acceptance or rejection first when any tail
+remains.
+
+Completion is terminal local control state. Associated runs reject new appends
+afterward, preventing evidence from silently appearing beyond final reconciled
+checkpoint. Start another mission for later work.
 
 ## Local API
 
