@@ -4,6 +4,7 @@ import (
 	"context"
 	"strings"
 	"testing"
+	"time"
 
 	"github.com/vajramatt/chainproof/internal/continuity"
 	"github.com/vajramatt/chainproof/internal/proof"
@@ -316,6 +317,54 @@ func TestMissionsListsMostRecentAndFiltersStatus(t *testing.T) {
 	}
 	if _, err = s.Missions(ctx, "paused", 10); err == nil || !strings.Contains(err.Error(), "invalid mission status") {
 		t.Fatalf("invalid status accepted: %v", err)
+	}
+}
+
+func TestMissionOrderingHandlesVariablePrecisionRFC3339Timestamps(t *testing.T) {
+	s, err := Open(t.TempDir() + "/test.db")
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer s.Close()
+	ctx := context.Background()
+	first, err := s.StartMission(ctx, continuity.MissionInput{Agent: "builder", Objective: "One"})
+	if err != nil {
+		t.Fatal(err)
+	}
+	second, err := s.StartMission(ctx, continuity.MissionInput{Agent: "builder", Objective: "Two"})
+	if err != nil {
+		t.Fatal(err)
+	}
+	older, newer := first, second
+	if older.ID < newer.ID {
+		older, newer = newer, older
+	}
+	if _, err = s.db.Exec(`UPDATE missions SET created_at=?,updated_at=? WHERE mission_id=?`, "2026-09-10T21:41:14.9435Z", "2026-09-10T21:41:14.9435Z", older.ID); err != nil {
+		t.Fatal(err)
+	}
+	if _, err = s.db.Exec(`UPDATE missions SET created_at=?,updated_at=? WHERE mission_id=?`, "2026-09-10T21:41:14.943559Z", "2026-09-10T21:41:14.943559Z", newer.ID); err != nil {
+		t.Fatal(err)
+	}
+	active, err := s.ActiveMission(ctx)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if active.ID != newer.ID {
+		t.Fatalf("active mission = %s, want newer %s", active.ID, newer.ID)
+	}
+	missions, err := s.Missions(ctx, "active", 2)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if len(missions) != 2 || missions[0].ID != newer.ID {
+		t.Fatalf("mission order ignored fractional precision: %+v", missions)
+	}
+	acquired, err := s.AcquireMission(ctx, continuity.LeaseInput{Holder: "worker", TTL: time.Minute}, 10)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if acquired.Mission.ID != older.ID {
+		t.Fatalf("acquired mission = %s, want oldest %s", acquired.Mission.ID, older.ID)
 	}
 }
 

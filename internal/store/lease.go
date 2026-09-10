@@ -73,7 +73,7 @@ func (s *Store) AcquireMission(ctx context.Context, input continuity.LeaseInput,
 		return continuity.MissionAcquisition{}, err
 	}
 	defer tx.Rollback()
-	rows, err := tx.QueryContext(ctx, `SELECT mission_id,agent,objective,status,created_at,updated_at,checkpoint_count,chain_head,metadata FROM missions WHERE status='active' ORDER BY updated_at,created_at,mission_id`)
+	rows, err := tx.QueryContext(ctx, `SELECT mission_id,agent,objective,status,created_at,updated_at,checkpoint_count,chain_head,metadata FROM missions WHERE status='active' ORDER BY `+missionOldestOrder)
 	if err != nil {
 		return continuity.MissionAcquisition{}, err
 	}

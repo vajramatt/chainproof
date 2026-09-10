@@ -15,6 +15,20 @@ import (
 	"github.com/vajramatt/chainproof/internal/proof"
 )
 
+const missionNewestOrder = `
+	substr(updated_at,1,19) DESC,
+	substr(CASE WHEN instr(updated_at,'.')>0 THEN substr(updated_at,instr(updated_at,'.')+1,instr(updated_at,'Z')-instr(updated_at,'.')-1) ELSE '' END || '000000000',1,9) DESC,
+	substr(created_at,1,19) DESC,
+	substr(CASE WHEN instr(created_at,'.')>0 THEN substr(created_at,instr(created_at,'.')+1,instr(created_at,'Z')-instr(created_at,'.')-1) ELSE '' END || '000000000',1,9) DESC,
+	mission_id DESC`
+
+const missionOldestOrder = `
+	substr(updated_at,1,19),
+	substr(CASE WHEN instr(updated_at,'.')>0 THEN substr(updated_at,instr(updated_at,'.')+1,instr(updated_at,'Z')-instr(updated_at,'.')-1) ELSE '' END || '000000000',1,9),
+	substr(created_at,1,19),
+	substr(CASE WHEN instr(created_at,'.')>0 THEN substr(created_at,instr(created_at,'.')+1,instr(created_at,'Z')-instr(created_at,'.')-1) ELSE '' END || '000000000',1,9),
+	mission_id`
+
 func (s *Store) StartMission(ctx context.Context, input continuity.MissionInput) (continuity.Mission, error) {
 	input.Agent = strings.TrimSpace(input.Agent)
 	input.Objective = strings.TrimSpace(input.Objective)
@@ -48,7 +62,7 @@ func (s *Store) Mission(ctx context.Context, id string) (continuity.Mission, err
 }
 
 func (s *Store) ActiveMission(ctx context.Context) (continuity.Mission, error) {
-	mission, err := scanMission(s.db.QueryRowContext(ctx, `SELECT mission_id,agent,objective,status,created_at,updated_at,checkpoint_count,chain_head,metadata FROM missions WHERE status='active' ORDER BY updated_at DESC LIMIT 1`))
+	mission, err := scanMission(s.db.QueryRowContext(ctx, `SELECT mission_id,agent,objective,status,created_at,updated_at,checkpoint_count,chain_head,metadata FROM missions WHERE status='active' ORDER BY `+missionNewestOrder+` LIMIT 1`))
 	if errors.Is(err, sql.ErrNoRows) {
 		return continuity.Mission{}, errors.New("active mission not found")
 	}
@@ -71,7 +85,7 @@ func (s *Store) Missions(ctx context.Context, status string, limit int) ([]conti
 		query += ` WHERE status=?`
 		args = append(args, status)
 	}
-	query += ` ORDER BY updated_at DESC LIMIT ?`
+	query += ` ORDER BY ` + missionNewestOrder + ` LIMIT ?`
 	args = append(args, limit)
 	rows, err := s.db.QueryContext(ctx, query, args...)
 	if err != nil {
