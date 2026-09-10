@@ -3,11 +3,11 @@ set -eu
 
 version="${1:-$(git describe --tags --exact-match 2>/dev/null || true)}"
 if [ -z "$version" ]; then
-  echo "usage: scripts/build-release.sh v0.5.0" >&2
+  echo "usage: scripts/build-release.sh v0.6.0" >&2
   exit 2
 fi
 if ! printf '%s\n' "$version" | grep -Eq '^v[0-9]+\.[0-9]+\.[0-9]+([.-][0-9A-Za-z.-]+)?$'; then
-  echo "release version must look like v0.5.0" >&2
+  echo "release version must look like v0.6.0" >&2
   exit 2
 fi
 binary_version=${version#v}

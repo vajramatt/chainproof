@@ -59,8 +59,8 @@ Current `main` contains the agent-first continuity loop:
 - mission, checkpoint, lease, context, and recovery access through the CLI, localhost API,
   TUI, and embedded read-only web explorer where appropriate
 
-Latest published release remains `v0.5.0`; these changes are being prepared for
-the next release. Source builds from `main` include them now.
+Current release line is `v0.6.0`. Source builds from `main` include these
+capabilities too.
 
 Next work deepens the same local-first architecture rather than adding a hosted
 control plane:
@@ -92,7 +92,7 @@ curl -fsSL https://raw.githubusercontent.com/vajramatt/chainproof/main/scripts/i
 Or, with Go 1.24 or newer:
 
 ```sh
-go install github.com/vajramatt/chainproof/cmd/chainproof@v0.5.0
+go install github.com/vajramatt/chainproof/cmd/chainproof@v0.6.0
 ```
 
 Or build the checkout:
@@ -541,8 +541,8 @@ local SQLite database using WAL mode and serialized writes. Artifact hashes are
 computed over raw bytes—not decoded text—and content-addressed by SHA-256.
 
 The web server binds to `127.0.0.1:7331` by default and rejects non-local host
-headers. v0.5.0 intentionally has no multi-user authentication; do not expose it
-to a network.
+headers. ChainProof intentionally has no multi-user authentication; do not
+expose it to a network.
 
 The things ChainProof writes are its own:
 

@@ -1,7 +1,7 @@
 #!/bin/sh
 set -eu
 
-version="${CHAINPROOF_VERSION:-v0.5.0}"
+version="${CHAINPROOF_VERSION:-v0.6.0}"
 repo="https://github.com/vajramatt/chainproof"
 bindir="${BINDIR:-${HOME}/.local/bin}"
 
