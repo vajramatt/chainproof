@@ -47,7 +47,7 @@ func TestWebExplorerIncludesMissionContinuityWorkspace(t *testing.T) {
 	response := httptest.NewRecorder()
 	app.http.Handler.ServeHTTP(response, request)
 	body := response.Body.String()
-	for _, text := range []string{`data-view="missions"`, `id="missionList"`, `id="missionDetail"`, "Commitment state is reported"} {
+	for _, text := range []string{`data-view="missions"`, `id="missionList"`, `id="missionDetail"`, "Commitment state is reported", "Recovery required", "data-recovery-run"} {
 		if !strings.Contains(body, text) {
 			t.Fatalf("mission workspace is missing %q", text)
 		}
@@ -198,6 +198,64 @@ func TestMissionContextAPICompilesVerifiedState(t *testing.T) {
 	}
 	if compiled.Checkpoint == nil || !compiled.Verification.Valid || len(compiled.Evidence) != 1 {
 		t.Fatalf("unexpected compiled context: %+v", compiled)
+	}
+}
+
+func TestMissionRecoveryAPIInspectsAndReconcilesTails(t *testing.T) {
+	db, err := store.Open(filepath.Join(t.TempDir(), "test.db"))
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer db.Close()
+	ctx := context.Background()
+	mission, _ := db.StartMission(ctx, continuity.MissionInput{Agent: "builder", Objective: "Recover through API"})
+	run, _ := db.Start(ctx, "builder", "codex", "gpt-test", map[string]any{"mission_id": mission.ID})
+	event, _ := db.Append(ctx, run.ID, proof.EventInput{Kind: "tool.result", Source: proof.Source{Adapter: "test", Mode: "observed"}})
+	app := New(db, "127.0.0.1:0", NewStatus("test"))
+
+	request := httptest.NewRequest(http.MethodGet, "http://localhost/api/missions/"+mission.ID+"/recovery/"+run.ID, nil)
+	response := httptest.NewRecorder()
+	app.http.Handler.ServeHTTP(response, request)
+	if response.Code != http.StatusOK {
+		t.Fatalf("inspect status %d: %s", response.Code, response.Body.String())
+	}
+	var inspection continuity.RecoveryInspection
+	if err = json.NewDecoder(response.Body).Decode(&inspection); err != nil {
+		t.Fatal(err)
+	}
+	if len(inspection.Events) != 1 || inspection.Events[0].ID != event.ID {
+		t.Fatalf("unexpected inspection: %+v", inspection)
+	}
+
+	request = httptest.NewRequest(http.MethodPost, "http://localhost/api/missions/"+mission.ID+"/recovery/"+run.ID+"/accept", strings.NewReader(`{"reason":"reviewed","summary":"Recovered safely"}`))
+	response = httptest.NewRecorder()
+	app.http.Handler.ServeHTTP(response, request)
+	if response.Code != http.StatusCreated {
+		t.Fatalf("accept status %d: %s", response.Code, response.Body.String())
+	}
+	var accepted continuity.Checkpoint
+	if err = json.NewDecoder(response.Body).Decode(&accepted); err != nil {
+		t.Fatal(err)
+	}
+	if accepted.Summary != "Recovered safely" {
+		t.Fatalf("unexpected acceptance: %+v", accepted)
+	}
+
+	rejectedRun, _ := db.Start(ctx, "builder", "codex", "gpt-test", map[string]any{"mission_id": mission.ID})
+	db.Append(ctx, rejectedRun.ID, proof.EventInput{Kind: "tool.result", Source: proof.Source{Adapter: "test", Mode: "imported"}})
+	request = httptest.NewRequest(http.MethodPost, "http://localhost/api/missions/"+mission.ID+"/recovery/"+rejectedRun.ID+"/reject", strings.NewReader(`{"reason":"untrusted"}`))
+	response = httptest.NewRecorder()
+	app.http.Handler.ServeHTTP(response, request)
+	if response.Code != http.StatusCreated {
+		t.Fatalf("reject status %d: %s", response.Code, response.Body.String())
+	}
+	var rejected continuity.Checkpoint
+	if err = json.NewDecoder(response.Body).Decode(&rejected); err != nil {
+		t.Fatal(err)
+	}
+	recovery, ok := rejected.Extensions["chainproof.recovery.v1"].(map[string]any)
+	if !ok || recovery["decision"] != "rejected" {
+		t.Fatalf("unexpected rejection: %+v", rejected)
 	}
 }
 

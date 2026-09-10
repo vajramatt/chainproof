@@ -185,9 +185,51 @@ Interrupted runs can contain evidence newer than the latest checkpoint. Context
 output marks this with `has_uncheckpointed_work` and lists each affected run in
 `uncheckpointed_work`, including anchored and current entry counts, both chain
 boundaries, and current run verification. These entries are recovery metadata;
-their event payloads are not promoted into trusted context. Inspect and
-reconcile the tail, then write a new checkpoint before treating it as resumable
-mission state.
+their event payloads are not promoted into trusted context.
+
+Inspect one verified tail before deciding:
+
+```sh
+chainproof recovery inspect MISSION_ID RUN_ID
+```
+
+Inspection returns only events after that run's latest anchored entry count,
+plus exact old and current chain boundaries. It refuses unrelated runs, invalid
+mission continuity, and invalid run proofs.
+
+Accept reviewed work with explicit resumable state:
+
+```sh
+chainproof recovery accept MISSION_ID RUN_ID '{
+  "reason": "reviewed diff and passing tests",
+  "summary": "Recovered implementation is safe",
+  "commitments": [],
+  "next_actions": ["continue integration"],
+  "blockers": []
+}'
+```
+
+Acceptance follows normal checkpoint rules. In particular, every prior
+commitment must remain in the new snapshot, and cited evidence must belong to
+the recovered run prefix.
+
+Reject a tail when it should not become resumable state:
+
+```sh
+chainproof recovery reject MISSION_ID RUN_ID "output contradicted tests"
+```
+
+Rejection does not delete or rewrite events. It creates a reported checkpoint
+anchored to the rejected run head, carries forward prior summary, commitments,
+next actions, and blockers, and omits prior cross-run evidence from the new
+snapshot. Earlier checkpoints retain those citations. With no prior
+checkpoint, rejection establishes an explicit empty trusted state.
+
+Both decisions reserve `extensions.chainproof.recovery.v1` with decision,
+reason, run ID, and exact from/to entry counts and chain heads. Because that
+extension is hashed with the checkpoint, later verification detects changes to
+the decision or boundary. Integrity still does not prove the review judgment
+was correct.
 
 ## Export session proof
 
@@ -217,6 +259,9 @@ GET  /api/missions?status=active&limit=100
 POST /api/missions/{mission_id}/checkpoints
 GET  /api/missions/{mission_id}/resume
 GET  /api/missions/{mission_id}/context?max_evidence=20
+GET  /api/missions/{mission_id}/recovery/{run_id}
+POST /api/missions/{mission_id}/recovery/{run_id}/accept
+POST /api/missions/{mission_id}/recovery/{run_id}/reject
 POST /api/runs   {"mission_id":"MISSION_ID", ...}
 GET  /api/missions/{mission_id}/lease?history=1
 POST /api/missions/{mission_id}/lease/claim
@@ -231,6 +276,10 @@ required by each action. Local API lease semantics match CLI semantics.
 Checkpoint requests accept `run_id`, `summary`, `commitments`, `next_actions`,
 `blockers`, `evidence`, and `extensions`. The API remains loopback-only by
 default and has no multi-user authentication.
+
+Recovery acceptance accepts `reason` plus checkpoint state fields. Recovery
+rejection accepts `{"reason":"..."}`. Store logic derives and reserves the
+recovery extension; callers cannot supply it.
 
 ## Architecture boundary
 

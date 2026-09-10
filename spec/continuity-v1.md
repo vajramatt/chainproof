@@ -107,6 +107,30 @@ plus `lease_active`. These fields let a worker detect current ownership before
 continuing. They remain derived local control state and are not continuity
 proof material.
 
+## Recovery reconciliation
+
+Uncheckpointed work remains outside trusted resumable state until an explicit
+recovery checkpoint anchors its exact current run prefix. Recovery checkpoints
+use reported provenance with adapter `recovery` and reserve the namespaced
+`chainproof.recovery.v1` extension. That hashed extension contains:
+
+- `decision` — `accepted` or `rejected`
+- `reason` — required operator or agent rationale
+- `run_id` — reconciled run
+- `from_entry_count` and `from_chain_head` — previous anchor, or genesis
+- `to_entry_count` and `to_chain_head` — newly anchored run prefix
+
+Acceptance supplies normal resumable checkpoint state and follows all evidence
+and commitment rules. Rejection does not delete canonical events. It carries
+forward prior summary, commitments, next actions, and blockers while omitting
+cross-run evidence from the new checkpoint. Earlier checkpoints keep their
+original evidence. With no prior checkpoint, rejection records an explicit
+empty trusted state.
+
+Reconciliation proves that the recorded decision and exact run boundary have
+not changed. It does not prove that accepting or rejecting the work was the
+correct judgment.
+
 The envelope is a rebuildable view, not canonical proof material, and must not
 be emitted when mission or run-anchor verification fails.
 

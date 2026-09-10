@@ -336,6 +336,190 @@ func TestBuildMissionContextFindsWorkBeforeFirstCheckpoint(t *testing.T) {
 	}
 }
 
+func TestInspectRecoveryReturnsOnlyVerifiedUncheckpointedTail(t *testing.T) {
+	s, err := Open(t.TempDir() + "/test.db")
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer s.Close()
+	ctx := context.Background()
+	mission, _ := s.StartMission(ctx, continuity.MissionInput{Agent: "builder", Objective: "Recover reviewed work"})
+	run, _ := s.Start(ctx, "builder", "codex", "gpt-test", map[string]any{"mission_id": mission.ID})
+	anchored, _ := s.Append(ctx, run.ID, proof.EventInput{Kind: "decision", Source: proof.Source{Adapter: "test", Mode: "reported"}})
+	s.CreateCheckpoint(ctx, mission.ID, run.ID, continuity.CheckpointInput{Summary: "Trusted state", Evidence: []continuity.EvidenceRef{{EventID: anchored.ID}}})
+	tail, _ := s.Append(ctx, run.ID, proof.EventInput{Kind: "tool.result", Source: proof.Source{Adapter: "test", Mode: "observed"}, Payload: map[string]any{"status": "passed"}})
+
+	inspection, err := s.InspectRecovery(ctx, mission.ID, run.ID)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if inspection.SchemaVersion != "1" || inspection.Source.Mode != "derived" || inspection.Source.Adapter != "recovery-inspector" {
+		t.Fatalf("inspection provenance missing: %+v", inspection)
+	}
+	if inspection.AnchoredEntryCount != 1 || inspection.AnchoredChainHead != anchored.EventHash || inspection.CurrentEntryCount != 2 || inspection.CurrentChainHead != tail.EventHash {
+		t.Fatalf("wrong recovery boundary: %+v", inspection)
+	}
+	if !inspection.Verification.Valid || len(inspection.Events) != 1 || inspection.Events[0].ID != tail.ID {
+		t.Fatalf("wrong recovery evidence: %+v", inspection)
+	}
+}
+
+func TestAcceptRecoveryCreatesProofBoundCheckpointAndClearsWarning(t *testing.T) {
+	s, err := Open(t.TempDir() + "/test.db")
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer s.Close()
+	ctx := context.Background()
+	mission, _ := s.StartMission(ctx, continuity.MissionInput{Agent: "builder", Objective: "Accept recovered work"})
+	run, _ := s.Start(ctx, "builder", "codex", "gpt-test", map[string]any{"mission_id": mission.ID})
+	event, _ := s.Append(ctx, run.ID, proof.EventInput{Kind: "tool.result", Source: proof.Source{Adapter: "test", Mode: "observed"}, Payload: map[string]any{"status": "passed"}})
+
+	checkpoint, err := s.AcceptRecovery(ctx, mission.ID, run.ID, "reviewed output", continuity.CheckpointInput{
+		Summary: "Recovered work passed review", Evidence: []continuity.EvidenceRef{{EventID: event.ID}}, NextActions: []string{"continue"},
+	})
+	if err != nil {
+		t.Fatal(err)
+	}
+	recovery, ok := checkpoint.Extensions["chainproof.recovery.v1"].(map[string]any)
+	if !ok || recovery["decision"] != "accepted" || recovery["reason"] != "reviewed output" || recovery["from_entry_count"] != 0 || recovery["to_entry_count"] != 1 {
+		t.Fatalf("recovery decision not proof-bound: %#v", checkpoint.Extensions)
+	}
+	compiled, err := s.BuildMissionContext(ctx, mission.ID, 20)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if compiled.HasUncheckpointedWork || len(compiled.UncheckpointedWork) != 0 || compiled.Checkpoint == nil || compiled.Checkpoint.ID != checkpoint.ID {
+		t.Fatalf("accepted tail remains uncheckpointed: %+v", compiled)
+	}
+	s.Append(ctx, run.ID, proof.EventInput{Kind: "decision", Source: proof.Source{Adapter: "test", Mode: "reported"}})
+	if _, err = s.AcceptRecovery(ctx, mission.ID, run.ID, "reviewed", continuity.CheckpointInput{Summary: "bad extension", Extensions: map[string]any{"chainproof.recovery.v1": map[string]any{"decision": "accepted"}}}); err == nil || !strings.Contains(err.Error(), "extension is reserved") {
+		t.Fatalf("caller forged recovery extension: %v", err)
+	}
+}
+
+func TestRejectRecoveryPreservesPriorStateWithoutPromotingTail(t *testing.T) {
+	s, err := Open(t.TempDir() + "/test.db")
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer s.Close()
+	ctx := context.Background()
+	mission, _ := s.StartMission(ctx, continuity.MissionInput{Agent: "builder", Objective: "Reject unsafe work"})
+	trustedRun, _ := s.Start(ctx, "builder", "codex", "gpt-test", map[string]any{"mission_id": mission.ID})
+	trustedEvent, _ := s.Append(ctx, trustedRun.ID, proof.EventInput{Kind: "decision", Source: proof.Source{Adapter: "test", Mode: "reported"}})
+	commitment := continuity.Commitment{ID: "safe", Description: "Keep trusted state", Status: "pending", Evidence: []continuity.EvidenceRef{{EventID: trustedEvent.ID}}}
+	s.CreateCheckpoint(ctx, mission.ID, trustedRun.ID, continuity.CheckpointInput{Summary: "Known safe state", Commitments: []continuity.Commitment{commitment}, NextActions: []string{"resume safely"}, Evidence: []continuity.EvidenceRef{{EventID: trustedEvent.ID}}})
+	interruptedRun, _ := s.Start(ctx, "builder", "codex", "gpt-test", map[string]any{"mission_id": mission.ID})
+	rejectedEvent, _ := s.Append(ctx, interruptedRun.ID, proof.EventInput{Kind: "tool.result", Source: proof.Source{Adapter: "test", Mode: "imported"}, Payload: map[string]any{"claim": "unreviewed"}})
+
+	checkpoint, err := s.RejectRecovery(ctx, mission.ID, interruptedRun.ID, "output contradicted tests")
+	if err != nil {
+		t.Fatal(err)
+	}
+	if checkpoint.Summary != "Known safe state" || len(checkpoint.NextActions) != 1 || checkpoint.NextActions[0] != "resume safely" {
+		t.Fatalf("prior trusted state not carried forward: %+v", checkpoint)
+	}
+	if len(checkpoint.Commitments) != 1 || checkpoint.Commitments[0].ID != "safe" || len(checkpoint.Commitments[0].Evidence) != 0 || len(checkpoint.Evidence) != 0 {
+		t.Fatalf("cross-run evidence was promoted: %+v", checkpoint)
+	}
+	recovery, ok := checkpoint.Extensions["chainproof.recovery.v1"].(map[string]any)
+	if !ok || recovery["decision"] != "rejected" || recovery["reason"] != "output contradicted tests" || recovery["from_entry_count"] != 0 || recovery["to_entry_count"] != 1 {
+		t.Fatalf("rejection not proof-bound: %#v", checkpoint.Extensions)
+	}
+	if checkpoint.Run.RunID != interruptedRun.ID || checkpoint.Run.ChainHead != rejectedEvent.EventHash {
+		t.Fatalf("rejected tail boundary not anchored: %+v", checkpoint.Run)
+	}
+	compiled, err := s.BuildMissionContext(ctx, mission.ID, 20)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if compiled.HasUncheckpointedWork || len(compiled.Evidence) != 0 {
+		t.Fatalf("rejected events became trusted or warning remained: %+v", compiled)
+	}
+}
+
+func TestRejectRecoveryKeepsPriorEvidenceWhenRunIsUnchanged(t *testing.T) {
+	s, err := Open(t.TempDir() + "/test.db")
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer s.Close()
+	ctx := context.Background()
+	mission, _ := s.StartMission(ctx, continuity.MissionInput{Agent: "builder", Objective: "Keep safe evidence"})
+	run, _ := s.Start(ctx, "builder", "codex", "gpt-test", map[string]any{"mission_id": mission.ID})
+	trusted, _ := s.Append(ctx, run.ID, proof.EventInput{Kind: "tool.result", Source: proof.Source{Adapter: "test", Mode: "observed"}})
+	commitment := continuity.Commitment{ID: "safe", Description: "Keep trusted state", Status: "pending", Evidence: []continuity.EvidenceRef{{EventID: trusted.ID}}}
+	s.CreateCheckpoint(ctx, mission.ID, run.ID, continuity.CheckpointInput{Summary: "Known safe state", Commitments: []continuity.Commitment{commitment}, Evidence: []continuity.EvidenceRef{{EventID: trusted.ID}}})
+	s.Append(ctx, run.ID, proof.EventInput{Kind: "tool.result", Source: proof.Source{Adapter: "test", Mode: "reported"}})
+
+	checkpoint, err := s.RejectRecovery(ctx, mission.ID, run.ID, "tail was wrong")
+	if err != nil {
+		t.Fatal(err)
+	}
+	if len(checkpoint.Evidence) != 1 || checkpoint.Evidence[0].EventID != trusted.ID || len(checkpoint.Commitments[0].Evidence) != 1 || checkpoint.Commitments[0].Evidence[0].EventID != trusted.ID {
+		t.Fatalf("safe same-run evidence was discarded: %+v", checkpoint)
+	}
+}
+
+func TestRecoveryRejectsUnrelatedRunAndEmptyTail(t *testing.T) {
+	s, err := Open(t.TempDir() + "/test.db")
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer s.Close()
+	ctx := context.Background()
+	mission, _ := s.StartMission(ctx, continuity.MissionInput{Agent: "builder", Objective: "Recover exact mission work"})
+	unrelated, _ := s.Start(ctx, "builder", "codex", "gpt-test", nil)
+	s.Append(ctx, unrelated.ID, proof.EventInput{Kind: "event", Source: proof.Source{Adapter: "test", Mode: "reported"}})
+	if _, err = s.InspectRecovery(ctx, mission.ID, unrelated.ID); err == nil || !strings.Contains(err.Error(), "not associated") {
+		t.Fatalf("unrelated run inspected: %v", err)
+	}
+	bound, _ := s.Start(ctx, "builder", "codex", "gpt-test", map[string]any{"mission_id": mission.ID})
+	if _, err = s.AcceptRecovery(ctx, mission.ID, bound.ID, "reviewed", continuity.CheckpointInput{Summary: "nothing"}); err == nil || !strings.Contains(err.Error(), "no uncheckpointed work") {
+		t.Fatalf("empty tail accepted: %v", err)
+	}
+	if _, err = s.RejectRecovery(ctx, mission.ID, bound.ID, ""); err == nil || !strings.Contains(err.Error(), "reason is required") {
+		t.Fatalf("empty rejection reason accepted: %v", err)
+	}
+	s.Append(ctx, bound.ID, proof.EventInput{Kind: "tool.result", Source: proof.Source{Adapter: "test", Mode: "reported"}})
+	checkpoint, err := s.RejectRecovery(ctx, mission.ID, bound.ID, "discard initial attempt")
+	if err != nil {
+		t.Fatal(err)
+	}
+	if checkpoint.Summary != "Uncheckpointed work rejected; no prior trusted checkpoint exists." || len(checkpoint.Commitments) != 0 || len(checkpoint.Evidence) != 0 {
+		t.Fatalf("initial rejection did not establish empty trusted state: %+v", checkpoint)
+	}
+}
+
+func TestRecoveryRefusesCorruptMissionContinuity(t *testing.T) {
+	s, err := Open(t.TempDir() + "/test.db")
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer s.Close()
+	ctx := context.Background()
+	mission, _ := s.StartMission(ctx, continuity.MissionInput{Agent: "builder", Objective: "Do not extend corrupt continuity"})
+	trustedRun, _ := s.Start(ctx, "builder", "codex", "gpt-test", map[string]any{"mission_id": mission.ID})
+	s.Append(ctx, trustedRun.ID, proof.EventInput{Kind: "decision", Source: proof.Source{Adapter: "test", Mode: "reported"}})
+	s.CreateCheckpoint(ctx, mission.ID, trustedRun.ID, continuity.CheckpointInput{Summary: "Trusted state"})
+	interruptedRun, _ := s.Start(ctx, "builder", "codex", "gpt-test", map[string]any{"mission_id": mission.ID})
+	s.Append(ctx, interruptedRun.ID, proof.EventInput{Kind: "tool.result", Source: proof.Source{Adapter: "test", Mode: "observed"}})
+	if _, err = s.db.ExecContext(ctx, `UPDATE checkpoints SET checkpoint_hash=? WHERE mission_id=?`, strings.Repeat("f", 64), mission.ID); err != nil {
+		t.Fatal(err)
+	}
+	if _, err = s.RejectRecovery(ctx, mission.ID, interruptedRun.ID, "unsafe"); err == nil || !strings.Contains(err.Error(), "continuity verification failed") {
+		t.Fatalf("corrupt continuity was extended: %v", err)
+	}
+	loaded, loadErr := s.Mission(ctx, mission.ID)
+	if loadErr != nil {
+		t.Fatal(loadErr)
+	}
+	if loaded.CheckpointCount != 1 {
+		t.Fatalf("corrupt continuity gained checkpoint: %+v", loaded)
+	}
+}
+
 func TestBuildMissionContextValidatesEvidenceBeyondOutputLimit(t *testing.T) {
 	s, err := Open(t.TempDir() + "/test.db")
 	if err != nil {

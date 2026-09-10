@@ -61,6 +61,12 @@ type CheckpointInput struct {
 	Blockers    []string       `json:"blockers,omitempty"`
 	Evidence    []EvidenceRef  `json:"evidence,omitempty"`
 	Extensions  map[string]any `json:"extensions,omitempty"`
+	Recovery    *RecoveryInput `json:"-"`
+}
+
+type RecoveryInput struct {
+	Decision string `json:"decision"`
+	Reason   string `json:"reason"`
 }
 
 type Checkpoint struct {
@@ -121,6 +127,19 @@ type UncheckpointedWork struct {
 	EventCount         int                `json:"event_count"`
 	CurrentChainHead   string             `json:"current_chain_head"`
 	Verification       proof.Verification `json:"verification"`
+}
+
+type RecoveryInspection struct {
+	SchemaVersion      string             `json:"schema_version"`
+	Source             proof.Source       `json:"source"`
+	MissionID          string             `json:"mission_id"`
+	RunID              string             `json:"run_id"`
+	AnchoredEntryCount int                `json:"anchored_entry_count"`
+	AnchoredChainHead  string             `json:"anchored_chain_head"`
+	CurrentEntryCount  int                `json:"current_entry_count"`
+	CurrentChainHead   string             `json:"current_chain_head"`
+	Verification       proof.Verification `json:"verification"`
+	Events             []proof.Event      `json:"events"`
 }
 
 type Bundle struct {

@@ -401,6 +401,56 @@ func run(args []string) error {
 		}
 		compiled, contextErr := db.BuildMissionContext(ctx, *missionID, *maxEvidence)
 		return output(compiled, contextErr)
+	case "recovery":
+		if len(args) < 4 {
+			return errors.New("usage: chainproof recovery inspect|accept|reject MISSION_ID RUN_ID [JSON|REASON]")
+		}
+		missionID, runID := args[2], args[3]
+		switch args[1] {
+		case "inspect":
+			if len(args) != 4 {
+				return errors.New("usage: chainproof recovery inspect MISSION_ID RUN_ID")
+			}
+			inspection, inspectionErr := db.InspectRecovery(ctx, missionID, runID)
+			return output(inspection, inspectionErr)
+		case "accept":
+			raw := strings.Join(args[4:], " ")
+			if raw == "" {
+				body, _ := io.ReadAll(os.Stdin)
+				raw = string(body)
+			}
+			var input continuity.CheckpointInput
+			var recovery struct {
+				Reason string `json:"reason"`
+			}
+			if e = json.Unmarshal([]byte(raw), &input); e != nil {
+				return e
+			}
+			if e = json.Unmarshal([]byte(raw), &recovery); e != nil {
+				return e
+			}
+			checkpoint, checkpointErr := db.AcceptRecovery(ctx, missionID, runID, recovery.Reason, input)
+			return output(checkpoint, checkpointErr)
+		case "reject":
+			reason := strings.TrimSpace(strings.Join(args[4:], " "))
+			if reason == "" {
+				body, _ := io.ReadAll(os.Stdin)
+				reason = strings.TrimSpace(string(body))
+			}
+			if strings.HasPrefix(reason, "{") {
+				var recovery struct {
+					Reason string `json:"reason"`
+				}
+				if e = json.Unmarshal([]byte(reason), &recovery); e != nil {
+					return e
+				}
+				reason = recovery.Reason
+			}
+			checkpoint, checkpointErr := db.RejectRecovery(ctx, missionID, runID, reason)
+			return output(checkpoint, checkpointErr)
+		default:
+			return errors.New("usage: chainproof recovery inspect|accept|reject MISSION_ID RUN_ID [JSON|REASON]")
+		}
 	case "ui":
 		watchCtx, cancel := context.WithCancel(ctx)
 		defer cancel()
@@ -812,6 +862,12 @@ Usage:
   chainproof resume [MISSION_ID]             Verify and load latest checkpoint
   chainproof context [--mission ID] [--max-evidence N]
                                               Compile bounded verified agent context
+  chainproof recovery inspect MISSION_ID RUN_ID
+                                              Review verified uncheckpointed events
+  chainproof recovery accept MISSION_ID RUN_ID [JSON]
+                                              Checkpoint reviewed recovered state
+  chainproof recovery reject MISSION_ID RUN_ID REASON
+                                              Preserve prior state and reject tail
   chainproof codex sync                     Discover/import Codex sessions once
   chainproof codex watch                    Continuously follow Codex sessions
   chainproof codex work [--mission ID] [--holder H] [--lease-ttl 30m]

@@ -155,6 +155,13 @@ Mission evidence links open the existing event inspector. This keeps human
 review aligned with `chainproof context`: both surfaces derive from the same
 verified checkpoint and preserve the same proof boundary.
 
+When verified events exist beyond a run's latest checkpoint anchor, the mission
+view shows a Recovery required rail. Opening a tail displays exact old and
+current chain heads plus each uncheckpointed event and provenance mode. The web
+view is inspection-only; acceptance and rejection require an explicit CLI or
+local API action carrying a reason and, for acceptance, complete resumable
+state.
+
 ### 1. Runs
 
 The default view is a dense, useful run list—not a collection of metric cards.
