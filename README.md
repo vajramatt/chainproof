@@ -43,6 +43,37 @@ It is built to answer five questions while agent work crosses sessions:
 No account. No API key. No tenant. No pricing page. The ledger lives on your
 machine and the code is MIT licensed.
 
+## Project status
+
+Current `main` contains the agent-first continuity loop:
+
+- durable missions spanning multiple agent runs and model sessions
+- append-only checkpoints anchored to exact verified run-proof prefixes
+- stable commitments, next actions, blockers, and cited evidence
+- bounded verified context for starting or resuming work
+- atomic mission acquisition plus expiring leases, renewal, release, and handoff
+- native Codex work execution with automatic lease lifecycle and checkpoint guidance
+- explicit review of interrupted, uncheckpointed work through recovery acceptance or rejection
+- terminal completion that refuses unresolved recovery tails and prevents later appends
+- portable continuity proofs covering checkpoint history and every anchored run prefix
+- mission, checkpoint, lease, context, and recovery access through the CLI, localhost API,
+  TUI, and embedded read-only web explorer where appropriate
+
+Latest published release remains `v0.5.0`; these changes are being prepared for
+the next release. Source builds from `main` include them now.
+
+Next work deepens the same local-first architecture rather than adding a hosted
+control plane:
+
+- release and installation hardening for the agent-first build
+- richer native integrations beyond Codex
+- deeper local web investigation across timelines, diffs, artifacts, failures,
+  comparisons, and proof reports
+- durable remote-executor handoff and multi-host lease coordination
+- signed agent identity while preserving existing proof boundaries
+
+Roadmap items are direction, not shipped claims or delivery commitments.
+
 Ordinary logs tell you what a process printed. ChainProof preserves the
 provenance around it: who or what produced an event, which adapter collected
 it, whether collection was live or retrospective, where it sits in the run,
