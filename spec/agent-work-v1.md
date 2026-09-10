@@ -50,7 +50,7 @@ and lets each integration decide how to place context in its model input.
 ## Native Codex profile
 
 ```sh
-chainproof codex work [--mission MISSION_ID] [--holder HOLDER] [--lease-ttl 30m] [--exec] [--prompt TEXT] -- [CODEX_OPTIONS]
+chainproof codex work [--mission MISSION_ID | --acquire] [--holder HOLDER] [--lease-ttl 30m] [--exec] [--prompt TEXT] -- [CODEX_OPTIONS]
 ```
 
 This profile uses the generic child environment and injects a first-line
@@ -85,6 +85,11 @@ lease. It renews at half-TTL intervals and releases only when same lease token
 still owns mission. A changed token indicates explicit handoff and is preserved.
 Lease ID and holder are recorded in wrapper-run metadata; this linkage remains
 local coordination state, not canonical proof material.
+
+With `--acquire`, profile atomically chooses oldest available active mission,
+verifies continuity, and claims lease before launch. It skips live leases and
+can reclaim expired ones. Returned context includes claimed token. Explicit
+`--mission` and `--acquire` cannot be combined.
 
 ## Recovery rule
 

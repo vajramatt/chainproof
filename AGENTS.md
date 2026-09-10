@@ -29,6 +29,8 @@ formats, and release artifacts.
   promote them into trusted resumable evidence automatically.
 - Do not complete missions with uncheckpointed run tails. Once mission is
   completed, reject new appends to its associated runs.
+- Keep queue acquisition atomic: select only active missions without a live
+  lease, verify continuity before claim, and return bounded context with token.
 - Keep Agent Work Protocol environment variables harness-neutral. Context files
   must be private, ephemeral, verified before child start, and treated as data
   rather than generic prompt text.

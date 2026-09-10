@@ -16,16 +16,9 @@ const defaultLeaseTTL = 30 * time.Minute
 const maxLeaseTTL = 24 * time.Hour
 
 func (s *Store) ClaimMission(ctx context.Context, missionID string, input continuity.LeaseInput) (continuity.MissionLease, error) {
-	holder := strings.TrimSpace(input.Holder)
-	if holder == "" {
-		return continuity.MissionLease{}, errors.New("lease holder is required")
-	}
-	ttl := input.TTL
-	if ttl == 0 {
-		ttl = defaultLeaseTTL
-	}
-	if ttl < time.Second || ttl > maxLeaseTTL {
-		return continuity.MissionLease{}, errors.New("lease TTL must be between 1s and 24h")
+	holder, ttl, err := validatedLeaseInput(input)
+	if err != nil {
+		return continuity.MissionLease{}, err
 	}
 	tx, err := s.db.BeginTx(ctx, nil)
 	if err != nil {
@@ -68,6 +61,112 @@ func (s *Store) ClaimMission(ctx context.Context, missionID string, input contin
 		return continuity.MissionLease{}, err
 	}
 	return lease, nil
+}
+
+func (s *Store) AcquireMission(ctx context.Context, input continuity.LeaseInput, maxEvidence int) (continuity.MissionAcquisition, error) {
+	holder, ttl, err := validatedLeaseInput(input)
+	if err != nil {
+		return continuity.MissionAcquisition{}, err
+	}
+	tx, err := s.db.BeginTx(ctx, nil)
+	if err != nil {
+		return continuity.MissionAcquisition{}, err
+	}
+	defer tx.Rollback()
+	rows, err := tx.QueryContext(ctx, `SELECT mission_id,agent,objective,status,created_at,updated_at,checkpoint_count,chain_head,metadata FROM missions WHERE status='active' ORDER BY updated_at,created_at,mission_id`)
+	if err != nil {
+		return continuity.MissionAcquisition{}, err
+	}
+	missions := []continuity.Mission{}
+	for rows.Next() {
+		mission, scanErr := scanMission(rows)
+		if scanErr != nil {
+			rows.Close()
+			return continuity.MissionAcquisition{}, scanErr
+		}
+		missions = append(missions, mission)
+	}
+	if err = rows.Err(); err != nil {
+		rows.Close()
+		return continuity.MissionAcquisition{}, err
+	}
+	if err = rows.Close(); err != nil {
+		return continuity.MissionAcquisition{}, err
+	}
+	now := s.leaseNow().UTC()
+	var selected continuity.Mission
+	var previous continuity.MissionLease
+	var foundPrevious bool
+	for _, mission := range missions {
+		candidatePrevious, found, leaseErr := latestMissionLease(ctx, tx, mission.ID)
+		if leaseErr != nil {
+			return continuity.MissionAcquisition{}, leaseErr
+		}
+		if found && candidatePrevious.Action != "released" && candidatePrevious.ExpiresAt.After(now) {
+			continue
+		}
+		if verifyErr := verifyMissionContinuityTx(ctx, tx, mission); verifyErr != nil {
+			return continuity.MissionAcquisition{}, fmt.Errorf("mission %s cannot be acquired: %w", mission.ID, verifyErr)
+		}
+		selected = mission
+		previous = candidatePrevious
+		foundPrevious = found
+		break
+	}
+	if selected.ID == "" {
+		return continuity.MissionAcquisition{}, errors.New("no available mission")
+	}
+	sequence := 0
+	previousLeaseID := ""
+	if foundPrevious {
+		sequence = previous.Sequence + 1
+		previousLeaseID = previous.LeaseID
+	}
+	lease := continuity.MissionLease{
+		EventID: uuid.NewString(), MissionID: selected.ID, Sequence: sequence, Action: "claimed",
+		LeaseID: uuid.NewString(), Holder: holder, PreviousLeaseID: previousLeaseID,
+		Timestamp: now, ExpiresAt: now.Add(ttl),
+	}
+	if err = insertMissionLease(ctx, tx, lease); err != nil {
+		return continuity.MissionAcquisition{}, err
+	}
+	result, err := tx.ExecContext(ctx, `UPDATE missions SET updated_at=? WHERE mission_id=? AND status='active'`, now.Format(time.RFC3339Nano), selected.ID)
+	if err != nil {
+		return continuity.MissionAcquisition{}, err
+	}
+	changed, _ := result.RowsAffected()
+	if changed != 1 {
+		return continuity.MissionAcquisition{}, errors.New("no available mission")
+	}
+	if err = tx.Commit(); err != nil {
+		return continuity.MissionAcquisition{}, err
+	}
+	selected.UpdatedAt = now
+	compiled, err := s.BuildMissionContext(ctx, selected.ID, maxEvidence)
+	if err != nil {
+		_, _ = s.ReleaseMission(ctx, selected.ID, lease.LeaseID)
+		return continuity.MissionAcquisition{}, fmt.Errorf("acquired mission context failed: %w", err)
+	}
+	if !compiled.LeaseActive || compiled.Lease == nil || compiled.Lease.LeaseID != lease.LeaseID {
+		_, _ = s.ReleaseMission(ctx, selected.ID, lease.LeaseID)
+		return continuity.MissionAcquisition{}, errors.New("mission lease expired before context was ready")
+	}
+	return continuity.MissionAcquisition{Mission: selected, Lease: lease, Context: compiled}, nil
+}
+
+func validatedLeaseInput(input continuity.LeaseInput) (string, time.Duration, error) {
+	holder := strings.TrimSpace(input.Holder)
+	if holder == "" {
+		return "", 0, errors.New("lease holder is required")
+	}
+	ttl := input.TTL
+	if ttl == 0 {
+		ttl = defaultLeaseTTL
+	}
+	if ttl < time.Second || ttl > maxLeaseTTL {
+		return "", 0, errors.New("lease TTL must be between 1s and 24h")
+	}
+	return holder, ttl, nil
 }
 
 func (s *Store) MissionLeaseHistory(ctx context.Context, missionID string) ([]continuity.MissionLease, error) {

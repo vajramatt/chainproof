@@ -282,6 +282,35 @@ func TestMissionListAPIShowsDiscoverableWork(t *testing.T) {
 	}
 }
 
+func TestMissionAcquireAPIClaimsAvailableWorkWithContext(t *testing.T) {
+	db, err := store.Open(filepath.Join(t.TempDir(), "test.db"))
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer db.Close()
+	mission, _ := db.StartMission(context.Background(), continuity.MissionInput{Agent: "builder", Objective: "Acquire through API"})
+	app := New(db, "127.0.0.1:0", NewStatus("test"))
+	request := httptest.NewRequest(http.MethodPost, "http://localhost/api/missions/acquire", strings.NewReader(`{"holder":"worker-a","ttl_seconds":600,"max_evidence":8}`))
+	response := httptest.NewRecorder()
+	app.http.Handler.ServeHTTP(response, request)
+	if response.Code != http.StatusCreated {
+		t.Fatalf("acquire status %d: %s", response.Code, response.Body.String())
+	}
+	var acquired continuity.MissionAcquisition
+	if err = json.NewDecoder(response.Body).Decode(&acquired); err != nil {
+		t.Fatal(err)
+	}
+	if acquired.Mission.ID != mission.ID || acquired.Lease.Holder != "worker-a" || acquired.Context.Mission.ID != mission.ID || !acquired.Context.LeaseActive {
+		t.Fatalf("unexpected acquisition: %+v", acquired)
+	}
+	request = httptest.NewRequest(http.MethodPost, "http://localhost/api/missions/acquire", strings.NewReader(`{"holder":"worker-b"}`))
+	response = httptest.NewRecorder()
+	app.http.Handler.ServeHTTP(response, request)
+	if response.Code != http.StatusBadRequest || !strings.Contains(response.Body.String(), "no available mission") {
+		t.Fatalf("competing acquire response %d: %s", response.Code, response.Body.String())
+	}
+}
+
 func TestRunAPIBindsToMissionAndInheritsAgent(t *testing.T) {
 	db, err := store.Open(filepath.Join(t.TempDir(), "test.db"))
 	if err != nil {

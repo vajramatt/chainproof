@@ -21,7 +21,14 @@ Discover existing work without retaining IDs outside ChainProof:
 
 ```sh
 chainproof mission list --status active
+chainproof mission acquire --holder worker-a --ttl 30m --max-evidence 20
 ```
+
+Acquisition atomically selects oldest available active mission, verifies its
+checkpoint chain and every anchored run prefix, writes lease claim, then
+returns mission, lease, and bounded context in one JSON envelope. Missions with
+live leases are skipped; expired leases are reclaimable. Invalid continuity
+stops acquisition without leaving a lease.
 
 ## Coordinate competing agents
 
@@ -74,6 +81,7 @@ For native Codex continuity, use:
 ```sh
 chainproof codex work --mission MISSION_ID
 chainproof codex work --mission MISSION_ID --holder worker-a --lease-ttl 30m --exec --prompt "Continue pending work" -- --model MODEL
+chainproof codex work --acquire --holder queue-worker --exec --prompt "Continue mission" -- --model MODEL
 ```
 
 This adds verified-context and checkpoint instructions to Codex's initial
@@ -82,6 +90,9 @@ the most recently updated active mission. The runner verifies continuity before
 claiming an expiring lease, renews it at half-TTL intervals, exposes
 `CHAINPROOF_LEASE_ID`, and releases its token after Codex exits. If Codex hands
 ownership to another holder, the runner preserves that handoff.
+With `--acquire`, runner atomically selects and claims next available verified
+mission instead of choosing a mission before lease acquisition. `--mission`
+and `--acquire` are mutually exclusive.
 
 Wrapped processes receive `CHAINPROOF_MISSION_ID`, `CHAINPROOF_RUN_ID`, and
 `CHAINPROOF_CONTEXT_FILE`. The context path points to a mode-`0600` JSON file
@@ -262,6 +273,7 @@ checkpoint. Start another mission for later work.
 
 ```text
 POST /api/missions
+POST /api/missions/acquire
 GET  /api/missions?status=active&limit=100
 POST /api/missions/{mission_id}/checkpoints
 GET  /api/missions/{mission_id}/resume
@@ -287,6 +299,9 @@ default and has no multi-user authentication.
 Recovery acceptance accepts `reason` plus checkpoint state fields. Recovery
 rejection accepts `{"reason":"..."}`. Store logic derives and reserves the
 recovery extension; callers cannot supply it.
+
+Mission acquisition accepts `holder`, integer `ttl_seconds`, and
+`max_evidence`. It returns mission, lease, and compiled context.
 
 ## Architecture boundary
 

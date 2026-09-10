@@ -30,6 +30,7 @@ func New(db *store.Store, address string, status *Status) *Server {
 	mux := http.NewServeMux()
 	mux.HandleFunc("GET /api/runs", s.listRuns)
 	mux.HandleFunc("POST /api/missions", s.startMission)
+	mux.HandleFunc("POST /api/missions/acquire", s.acquireMission)
 	mux.HandleFunc("GET /api/missions", s.listMissions)
 	mux.HandleFunc("POST /api/missions/{id}/checkpoints", s.createCheckpoint)
 	mux.HandleFunc("GET /api/missions/{id}/resume", s.resumeMission)
@@ -86,9 +87,10 @@ func (s *Server) listMissions(w http.ResponseWriter, r *http.Request) {
 }
 
 type leaseRequest struct {
-	LeaseID    string `json:"lease_id"`
-	Holder     string `json:"holder"`
-	TTLSeconds int64  `json:"ttl_seconds"`
+	LeaseID     string `json:"lease_id"`
+	Holder      string `json:"holder"`
+	TTLSeconds  int64  `json:"ttl_seconds"`
+	MaxEvidence int    `json:"max_evidence"`
 }
 
 func (in leaseRequest) ttl() (time.Duration, error) {
@@ -114,6 +116,21 @@ func (s *Server) missionLease(w http.ResponseWriter, r *http.Request) {
 		response["history"] = history
 	}
 	respond(w, response, nil, http.StatusOK)
+}
+
+func (s *Server) acquireMission(w http.ResponseWriter, r *http.Request) {
+	var input leaseRequest
+	err := decode(r, &input)
+	var ttl time.Duration
+	if err == nil {
+		ttl, err = input.ttl()
+	}
+	if err == nil {
+		acquisition, acquireErr := s.store.AcquireMission(r.Context(), continuity.LeaseInput{Holder: input.Holder, TTL: ttl}, input.MaxEvidence)
+		respond(w, acquisition, acquireErr, http.StatusCreated)
+		return
+	}
+	respond(w, nil, err, 0)
 }
 
 func (s *Server) claimMission(w http.ResponseWriter, r *http.Request) {
