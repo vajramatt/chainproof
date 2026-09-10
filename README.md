@@ -579,6 +579,8 @@ format transition and interoperability fixtures.
 
 Contributions are welcome. Start with [`CONTRIBUTING.md`](CONTRIBUTING.md), and
 please report security problems as described in [`SECURITY.md`](SECURITY.md).
+Maintainers should follow [`docs/releasing.md`](docs/releasing.md); tags are
+release contracts, not backup markers.
 
 ## License
 
