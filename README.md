@@ -176,7 +176,6 @@ then anchors that state to an exact run-proof prefix.
 ```sh
 chainproof mission start --agent builder --objective "Ship durable continuity"
 chainproof mission list --status active
-chainproof mission claim MISSION_ID --holder builder --ttl 30m
 chainproof codex work --mission MISSION_ID
 chainproof checkpoint MISSION_ID RUN_ID '{
   "summary": "Storage and API tests pass",
@@ -203,10 +202,13 @@ to its integration. Wrapped agents can call `chainproof context` and
 `chainproof codex work` is the native Codex integration. It verifies and injects
 mission context, tells Codex to checkpoint before ending, and emits a linkage
 marker that the local collector validates against the mission execution run.
-Codex options follow `--`; use `--exec` for non-interactive work:
+It atomically claims the mission, renews ownership during long sessions, and
+releases ownership on exit unless Codex handed it to another worker. Lease ID
+and holder are recorded in run metadata. Codex options follow `--`; use
+`--exec` for non-interactive work:
 
 ```sh
-chainproof codex work --mission MISSION_ID -- --model gpt-5.6-sol
+chainproof codex work --mission MISSION_ID --holder builder --lease-ttl 30m -- --model gpt-5.6-sol
 chainproof codex work --mission MISSION_ID --exec --prompt "Finish pending tests" -- --model gpt-5.6-sol
 ```
 
@@ -227,6 +229,13 @@ Lease transitions form append-only local coordination history. They are not
 part of continuity proof v1, do not establish cryptographic identity, and do
 not change checkpoint hashes. Expiry permits crash recovery without rewriting
 history.
+
+Wrapped Codex receives `CHAINPROOF_LEASE_ID` alongside mission, run, and
+context variables. It can transfer ownership before exit:
+
+```sh
+chainproof mission handoff "$CHAINPROOF_MISSION_ID" "$CHAINPROOF_LEASE_ID" --to NEXT_HOLDER
+```
 
 `chainproof resume` without an ID loads the most recently updated active
 mission. It returns the latest checkpoint together with verification state, so

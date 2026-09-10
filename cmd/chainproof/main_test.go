@@ -1,6 +1,7 @@
 package main
 
 import (
+	"context"
 	"encoding/json"
 	"errors"
 	"io"
@@ -8,9 +9,11 @@ import (
 	"path/filepath"
 	"strings"
 	"testing"
+	"time"
 
 	"github.com/vajramatt/chainproof/internal/continuity"
 	"github.com/vajramatt/chainproof/internal/proof"
+	"github.com/vajramatt/chainproof/internal/store"
 )
 
 func TestMissionCLIStartsCheckpointsAndResumes(t *testing.T) {
@@ -360,23 +363,52 @@ func TestCodexWorkStartsMissionAwareCodex(t *testing.T) {
 		t.Fatal(err)
 	}
 	childJSON := captureStdout(t, func() error {
-		return run([]string{"codex", "work", "--mission", mission.ID, "--prompt", "Continue implementation", "--", "-test.run=TestCodexWorkEnvironmentHelper"})
+		return run([]string{"codex", "work", "--mission", mission.ID, "--holder", "codex-worker", "--lease-ttl", "1h", "--prompt", "Continue implementation", "--", "-test.run=TestCodexWorkEnvironmentHelper"})
 	})
 	var child struct {
-		MissionID      string `json:"mission_id"`
-		RunID          string `json:"run_id"`
-		ContextMission string `json:"context_mission"`
-		Prompt         string `json:"prompt"`
+		MissionID          string `json:"mission_id"`
+		RunID              string `json:"run_id"`
+		LeaseID            string `json:"lease_id"`
+		ContextMission     string `json:"context_mission"`
+		ContextLeaseID     string `json:"context_lease_id"`
+		ContextLeaseHolder string `json:"context_lease_holder"`
+		Prompt             string `json:"prompt"`
 	}
 	if err := json.Unmarshal([]byte(childJSON), &child); err != nil {
 		t.Fatal(err)
 	}
-	if child.MissionID != mission.ID || child.RunID == "" || child.ContextMission != mission.ID {
+	if child.MissionID != mission.ID || child.RunID == "" || child.LeaseID == "" || child.ContextMission != mission.ID || child.ContextLeaseID != child.LeaseID || child.ContextLeaseHolder != "codex-worker" {
 		t.Fatalf("Codex did not receive mission environment: %+v", child)
 	}
 	marker := `CHAINPROOF_AGENT_WORK_V1 {"mission_id":"` + mission.ID + `","parent_run_id":"` + child.RunID + `"}`
-	if !strings.Contains(child.Prompt, marker) || !strings.Contains(child.Prompt, "CHAINPROOF_CONTEXT_FILE") || !strings.Contains(child.Prompt, "chainproof checkpoint --current") || !strings.Contains(child.Prompt, "Continue implementation") {
+	if !strings.Contains(child.Prompt, marker) || !strings.Contains(child.Prompt, "CHAINPROOF_CONTEXT_FILE") || !strings.Contains(child.Prompt, "CHAINPROOF_LEASE_ID") || !strings.Contains(child.Prompt, "chainproof mission handoff") || !strings.Contains(child.Prompt, "chainproof checkpoint --current") || !strings.Contains(child.Prompt, "Continue implementation") {
 		t.Fatalf("Codex did not receive agent work protocol prompt: %q", child.Prompt)
+	}
+	leaseJSON := captureStdout(t, func() error { return run([]string{"mission", "lease", mission.ID, "--history"}) })
+	var leaseState struct {
+		Active  bool                      `json:"active"`
+		History []continuity.MissionLease `json:"history"`
+	}
+	if err := json.Unmarshal([]byte(leaseJSON), &leaseState); err != nil {
+		t.Fatal(err)
+	}
+	if leaseState.Active || len(leaseState.History) != 2 || leaseState.History[0].Action != "claimed" || leaseState.History[1].Action != "released" {
+		t.Fatalf("Codex lease lifecycle not closed: %+v", leaseState)
+	}
+	runsJSON := captureStdout(t, func() error { return run([]string{"list"}) })
+	var runs []proof.Run
+	if err := json.Unmarshal([]byte(runsJSON), &runs); err != nil {
+		t.Fatal(err)
+	}
+	var wrapped proof.Run
+	for _, candidate := range runs {
+		if candidate.ID == child.RunID {
+			wrapped = candidate
+			break
+		}
+	}
+	if wrapped.Metadata["lease_id"] != child.LeaseID || wrapped.Metadata["lease_holder"] != "codex-worker" {
+		t.Fatalf("Codex run omitted lease binding: %+v", wrapped.Metadata)
 	}
 }
 
@@ -385,25 +417,105 @@ func TestCodexWorkEnvironmentHelper(t *testing.T) {
 		return
 	}
 	contextMission := ""
+	contextLeaseID := ""
+	contextLeaseHolder := ""
 	if raw, err := os.ReadFile(os.Getenv("CHAINPROOF_CONTEXT_FILE")); err == nil {
 		var compiled continuity.MissionContext
 		if json.Unmarshal(raw, &compiled) == nil {
 			contextMission = compiled.Mission.ID
+			if compiled.Lease != nil {
+				contextLeaseID = compiled.Lease.LeaseID
+				contextLeaseHolder = compiled.Lease.Holder
+			}
 		}
 	}
 	prompt := ""
 	if len(os.Args) > 1 {
 		prompt = os.Args[len(os.Args)-1]
 	}
+	if os.Getenv("CHAINPROOF_CODEX_WORK_HANDOFF") == "1" {
+		db, err := store.Open(os.Getenv("CHAINPROOF_DB"))
+		if err != nil {
+			os.Exit(3)
+		}
+		_, err = db.HandoffMission(context.Background(), os.Getenv("CHAINPROOF_MISSION_ID"), os.Getenv("CHAINPROOF_LEASE_ID"), continuity.LeaseInput{Holder: "successor", TTL: time.Hour})
+		db.Close()
+		if err != nil {
+			os.Exit(4)
+		}
+	}
 	if err := json.NewEncoder(os.Stdout).Encode(map[string]string{
-		"mission_id":      os.Getenv("CHAINPROOF_MISSION_ID"),
-		"run_id":          os.Getenv("CHAINPROOF_RUN_ID"),
-		"context_mission": contextMission,
-		"prompt":          prompt,
+		"mission_id":           os.Getenv("CHAINPROOF_MISSION_ID"),
+		"run_id":               os.Getenv("CHAINPROOF_RUN_ID"),
+		"lease_id":             os.Getenv("CHAINPROOF_LEASE_ID"),
+		"context_mission":      contextMission,
+		"context_lease_id":     contextLeaseID,
+		"context_lease_holder": contextLeaseHolder,
+		"prompt":               prompt,
 	}); err != nil {
 		os.Exit(2)
 	}
 	os.Exit(0)
+}
+
+func TestCodexWorkPreservesExplicitLeaseHandoff(t *testing.T) {
+	t.Setenv("CHAINPROOF_DB", filepath.Join(t.TempDir(), "chainproof.db"))
+	t.Setenv("CHAINPROOF_CODEX_DISABLED", "1")
+	t.Setenv("CHAINPROOF_CODEX_BIN", os.Args[0])
+	t.Setenv("CHAINPROOF_CODEX_WORK_HELPER", "1")
+	t.Setenv("CHAINPROOF_CODEX_WORK_HANDOFF", "1")
+	missionJSON := captureStdout(t, func() error {
+		return run([]string{"mission", "start", "--agent", "builder", "--objective", "Hand work to successor"})
+	})
+	var mission continuity.Mission
+	if err := json.Unmarshal([]byte(missionJSON), &mission); err != nil {
+		t.Fatal(err)
+	}
+	captureStdout(t, func() error {
+		return run([]string{"codex", "work", "--mission", mission.ID, "--holder", "first-worker", "--", "-test.run=TestCodexWorkEnvironmentHelper"})
+	})
+	leaseJSON := captureStdout(t, func() error { return run([]string{"mission", "lease", mission.ID, "--history"}) })
+	var state struct {
+		Active  bool                      `json:"active"`
+		Lease   continuity.MissionLease   `json:"lease"`
+		History []continuity.MissionLease `json:"history"`
+	}
+	if err := json.Unmarshal([]byte(leaseJSON), &state); err != nil {
+		t.Fatal(err)
+	}
+	if !state.Active || state.Lease.Holder != "successor" || len(state.History) != 2 || state.History[1].Action != "handoff" {
+		t.Fatalf("wrapper overwrote explicit handoff: %+v", state)
+	}
+}
+
+func TestRenewMissionLeaseExtendsRunnerOwnership(t *testing.T) {
+	db, err := store.Open(filepath.Join(t.TempDir(), "chainproof.db"))
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer db.Close()
+	ctx := context.Background()
+	mission, err := db.StartMission(ctx, continuity.MissionInput{Agent: "builder", Objective: "Long horizon work"})
+	if err != nil {
+		t.Fatal(err)
+	}
+	lease, err := db.ClaimMission(ctx, mission.ID, continuity.LeaseInput{Holder: "codex-worker", TTL: time.Minute})
+	if err != nil {
+		t.Fatal(err)
+	}
+	ticks := make(chan time.Time, 1)
+	ticks <- time.Now()
+	close(ticks)
+	if err = renewMissionLease(ctx, db, mission.ID, lease.LeaseID, time.Hour, ticks); err != nil {
+		t.Fatal(err)
+	}
+	history, err := db.MissionLeaseHistory(ctx, mission.ID)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if len(history) != 2 || history[1].Action != "renewed" || history[1].LeaseID != lease.LeaseID {
+		t.Fatalf("runner did not renew lease: %+v", history)
+	}
 }
 
 func captureStdout(t *testing.T, action func() error) string {
