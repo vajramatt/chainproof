@@ -6,6 +6,11 @@ if [ -z "$version" ]; then
   echo "usage: scripts/build-release.sh v0.5.0" >&2
   exit 2
 fi
+if ! printf '%s\n' "$version" | grep -Eq '^v[0-9]+\.[0-9]+\.[0-9]+([.-][0-9A-Za-z.-]+)?$'; then
+  echo "release version must look like v0.5.0" >&2
+  exit 2
+fi
+binary_version=${version#v}
 
 root=$(CDPATH= cd -- "$(dirname -- "$0")/.." && pwd)
 dist="$root/dist"
@@ -18,7 +23,7 @@ for target in darwin/arm64 darwin/amd64 linux/arm64 linux/amd64; do
   work="$dist/$name"
   mkdir -p "$work"
   echo "building $os/$arch"
-  CGO_ENABLED=0 GOOS="$os" GOARCH="$arch" go build -trimpath -ldflags="-s -w" -o "$work/chainproof" ./cmd/chainproof
+  CGO_ENABLED=0 GOOS="$os" GOARCH="$arch" go build -trimpath -ldflags="-s -w -X main.version=$binary_version" -o "$work/chainproof" ./cmd/chainproof
   cp LICENSE README.md "$work/"
   tar -C "$dist" -czf "$dist/$name.tar.gz" "$name"
   rm -r "$work"
