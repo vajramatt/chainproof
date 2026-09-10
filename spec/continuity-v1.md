@@ -12,6 +12,12 @@ the checkpoint count and current checkpoint-chain head. Operational metadata,
 status, and timestamps are local control state. Checkpoints bind the agent and
 SHA-256 hash of the objective into the continuity proof.
 
+Mission leases and their append-only transition history are also local control
+state. They coordinate concurrent workers through expiring capability tokens
+but are not canonical continuity material, are not included in portable
+bundles, and do not alter checkpoint hashes. A lease does not prove
+cryptographic agent identity.
+
 ## Canonical checkpoint
 
 Every hashed checkpoint contains these fields:
@@ -95,6 +101,11 @@ its latest checkpointed entry count and chain head, current entry count and
 chain head, uncheckpointed event count, status, and full-run verification.
 These entries expose interrupted work for recovery but do not add their events
 to the trusted `evidence` array.
+
+The envelope includes the latest local coordination `lease`, when one exists,
+plus `lease_active`. These fields let a worker detect current ownership before
+continuing. They remain derived local control state and are not continuity
+proof material.
 
 The envelope is a rebuildable view, not canonical proof material, and must not
 be emitted when mission or run-anchor verification fails.

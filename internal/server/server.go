@@ -9,6 +9,7 @@ import (
 	"net/http"
 	"strconv"
 	"strings"
+	"time"
 
 	"github.com/vajramatt/chainproof/internal/continuity"
 	"github.com/vajramatt/chainproof/internal/proof"
@@ -33,6 +34,11 @@ func New(db *store.Store, address string, status *Status) *Server {
 	mux.HandleFunc("POST /api/missions/{id}/checkpoints", s.createCheckpoint)
 	mux.HandleFunc("GET /api/missions/{id}/resume", s.resumeMission)
 	mux.HandleFunc("GET /api/missions/{id}/context", s.missionContext)
+	mux.HandleFunc("GET /api/missions/{id}/lease", s.missionLease)
+	mux.HandleFunc("POST /api/missions/{id}/lease/claim", s.claimMission)
+	mux.HandleFunc("POST /api/missions/{id}/lease/renew", s.renewMission)
+	mux.HandleFunc("POST /api/missions/{id}/lease/handoff", s.handoffMission)
+	mux.HandleFunc("POST /api/missions/{id}/lease/release", s.releaseMission)
 	mux.HandleFunc("GET /api/status", s.getStatus)
 	mux.HandleFunc("GET /api/search", s.search)
 	mux.HandleFunc("GET /api/events/{id}", s.getEvent)
@@ -74,6 +80,93 @@ func (s *Server) listMissions(w http.ResponseWriter, r *http.Request) {
 	}
 	missions, err := s.store.Missions(r.Context(), r.URL.Query().Get("status"), limit)
 	respond(w, missions, err, http.StatusOK)
+}
+
+type leaseRequest struct {
+	LeaseID    string `json:"lease_id"`
+	Holder     string `json:"holder"`
+	TTLSeconds int64  `json:"ttl_seconds"`
+}
+
+func (in leaseRequest) ttl() (time.Duration, error) {
+	if in.TTLSeconds < 0 || in.TTLSeconds > int64((24*time.Hour)/time.Second) {
+		return 0, errors.New("ttl_seconds must be between 0 and 86400")
+	}
+	return time.Duration(in.TTLSeconds) * time.Second, nil
+}
+
+func (s *Server) missionLease(w http.ResponseWriter, r *http.Request) {
+	lease, active, err := s.store.MissionLease(r.Context(), r.PathValue("id"))
+	if err != nil {
+		respond(w, nil, err, 0)
+		return
+	}
+	response := map[string]any{"active": active, "lease": lease}
+	if r.URL.Query().Get("history") != "" {
+		history, historyErr := s.store.MissionLeaseHistory(r.Context(), r.PathValue("id"))
+		if historyErr != nil {
+			respond(w, nil, historyErr, 0)
+			return
+		}
+		response["history"] = history
+	}
+	respond(w, response, nil, http.StatusOK)
+}
+
+func (s *Server) claimMission(w http.ResponseWriter, r *http.Request) {
+	var input leaseRequest
+	err := decode(r, &input)
+	var ttl time.Duration
+	if err == nil {
+		ttl, err = input.ttl()
+	}
+	if err == nil {
+		lease, claimErr := s.store.ClaimMission(r.Context(), r.PathValue("id"), continuity.LeaseInput{Holder: input.Holder, TTL: ttl})
+		respond(w, lease, claimErr, http.StatusCreated)
+		return
+	}
+	respond(w, nil, err, 0)
+}
+
+func (s *Server) renewMission(w http.ResponseWriter, r *http.Request) {
+	var input leaseRequest
+	err := decode(r, &input)
+	var ttl time.Duration
+	if err == nil {
+		ttl, err = input.ttl()
+	}
+	if err == nil {
+		lease, renewErr := s.store.RenewMission(r.Context(), r.PathValue("id"), input.LeaseID, ttl)
+		respond(w, lease, renewErr, http.StatusOK)
+		return
+	}
+	respond(w, nil, err, 0)
+}
+
+func (s *Server) handoffMission(w http.ResponseWriter, r *http.Request) {
+	var input leaseRequest
+	err := decode(r, &input)
+	var ttl time.Duration
+	if err == nil {
+		ttl, err = input.ttl()
+	}
+	if err == nil {
+		lease, handoffErr := s.store.HandoffMission(r.Context(), r.PathValue("id"), input.LeaseID, continuity.LeaseInput{Holder: input.Holder, TTL: ttl})
+		respond(w, lease, handoffErr, http.StatusCreated)
+		return
+	}
+	respond(w, nil, err, 0)
+}
+
+func (s *Server) releaseMission(w http.ResponseWriter, r *http.Request) {
+	var input leaseRequest
+	err := decode(r, &input)
+	if err == nil {
+		lease, releaseErr := s.store.ReleaseMission(r.Context(), r.PathValue("id"), input.LeaseID)
+		respond(w, lease, releaseErr, http.StatusOK)
+		return
+	}
+	respond(w, nil, err, 0)
 }
 
 func (s *Server) createCheckpoint(w http.ResponseWriter, r *http.Request) {

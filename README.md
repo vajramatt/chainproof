@@ -176,6 +176,7 @@ then anchors that state to an exact run-proof prefix.
 ```sh
 chainproof mission start --agent builder --objective "Ship durable continuity"
 chainproof mission list --status active
+chainproof mission claim MISSION_ID --holder builder --ttl 30m
 chainproof codex work --mission MISSION_ID
 chainproof checkpoint MISSION_ID RUN_ID '{
   "summary": "Storage and API tests pass",
@@ -210,6 +211,22 @@ chainproof codex work --mission MISSION_ID --exec --prompt "Finish pending tests
 ```
 
 When `--mission` is omitted, the most recently updated active mission is used.
+
+Competing agents coordinate with expiring mission leases. Claims are atomic;
+renewal and release require the current lease token. Handoff atomically issues
+a new token to the next holder:
+
+```sh
+chainproof mission lease MISSION_ID --history
+chainproof mission renew MISSION_ID LEASE_ID --ttl 30m
+chainproof mission handoff MISSION_ID LEASE_ID --to reviewer --ttl 30m
+chainproof mission release MISSION_ID LEASE_ID
+```
+
+Lease transitions form append-only local coordination history. They are not
+part of continuity proof v1, do not establish cryptographic identity, and do
+not change checkpoint hashes. Expiry permits crash recovery without rewriting
+history.
 
 `chainproof resume` without an ID loads the most recently updated active
 mission. It returns the latest checkpoint together with verification state, so
@@ -473,6 +490,11 @@ It does not edit the repositories or harness histories it observes.
 | `chainproof mission list` | discover missions by status |
 | `chainproof mission complete` | close a mission after a valid checkpoint |
 | `chainproof mission export` | export checkpoints and anchored run proofs |
+| `chainproof mission claim` | atomically acquire an expiring mission lease |
+| `chainproof mission lease` | inspect active ownership and coordination history |
+| `chainproof mission renew` | extend a lease using its current token |
+| `chainproof mission handoff` | transfer ownership with a new lease token |
+| `chainproof mission release` | release current ownership |
 | `chainproof start` | open a provenance run |
 | `chainproof append` | append one reported event |
 | `chainproof ingest` | import JSONL from stdin |

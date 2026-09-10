@@ -23,6 +23,38 @@ Discover existing work without retaining IDs outside ChainProof:
 chainproof mission list --status active
 ```
 
+## Coordinate competing agents
+
+Acquire an expiring lease before assigning one mission to a worker:
+
+```sh
+chainproof mission claim MISSION_ID --holder worker-a --ttl 30m
+chainproof mission lease MISSION_ID --history
+```
+
+Only the current lease token can renew, release, or hand off ownership:
+
+```sh
+chainproof mission renew MISSION_ID LEASE_ID --ttl 30m
+chainproof mission handoff MISSION_ID LEASE_ID --to worker-b --ttl 30m
+chainproof mission release MISSION_ID LEASE_ID
+```
+
+Handoff atomically replaces the token, preventing the prior holder from
+renewing or releasing the new lease. An expired lease cannot be renewed and a
+new worker may claim the mission, providing crash recovery without manual
+database repair. TTL must be between one second and 24 hours.
+
+Lease transitions are retained as append-only local coordination history.
+They are not hashed, exported in continuity bundles, or treated as agent
+identity proof. Checkpoints and anchored run prefixes remain the cryptographic
+continuity boundary.
+
+`chainproof context` includes latest lease plus `lease_active`, allowing agent
+harnesses to reject conflicting work before acting. v1 uses local wall-clock
+expiry and serialized SQLite transactions. Multi-host coordination, clock
+authority, and signed holder identity remain future protocol work.
+
 ## Work inside the mission
 
 Start a run manually:
@@ -179,7 +211,15 @@ POST /api/missions/{mission_id}/checkpoints
 GET  /api/missions/{mission_id}/resume
 GET  /api/missions/{mission_id}/context?max_evidence=20
 POST /api/runs   {"mission_id":"MISSION_ID", ...}
+GET  /api/missions/{mission_id}/lease?history=1
+POST /api/missions/{mission_id}/lease/claim
+POST /api/missions/{mission_id}/lease/renew
+POST /api/missions/{mission_id}/lease/handoff
+POST /api/missions/{mission_id}/lease/release
 ```
+
+Lease mutation bodies use `holder`, `lease_id`, and integer `ttl_seconds` as
+required by each action. Local API lease semantics match CLI semantics.
 
 Checkpoint requests accept `run_id`, `summary`, `commitments`, `next_actions`,
 `blockers`, `evidence`, and `extensions`. The API remains loopback-only by

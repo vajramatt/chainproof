@@ -34,6 +34,10 @@ the `MissionContext` schema documented in
 [continuity-v1.md](continuity-v1.md). Harness integrations should read it before
 beginning work.
 
+Compiled context may include an active mission lease. Harness integrations
+should not begin competing work when `lease_active` names another holder.
+Lease coordination is local control state, not proof of agent identity.
+
 Inside a wrapped process, `chainproof context` uses
 `CHAINPROOF_MISSION_ID` when `--mission` is omitted. Explicit flags still take
 precedence.
