@@ -73,12 +73,15 @@ For native Codex continuity, use:
 
 ```sh
 chainproof codex work --mission MISSION_ID
-chainproof codex work --mission MISSION_ID --exec --prompt "Continue pending work" -- --model MODEL
+chainproof codex work --mission MISSION_ID --holder worker-a --lease-ttl 30m --exec --prompt "Continue pending work" -- --model MODEL
 ```
 
 This adds verified-context and checkpoint instructions to Codex's initial
 prompt. Options after `--` pass through to Codex. Omitting `--mission` selects
-the most recently updated active mission.
+the most recently updated active mission. The runner verifies continuity before
+claiming an expiring lease, renews it at half-TTL intervals, exposes
+`CHAINPROOF_LEASE_ID`, and releases its token after Codex exits. If Codex hands
+ownership to another holder, the runner preserves that handoff.
 
 Wrapped processes receive `CHAINPROOF_MISSION_ID`, `CHAINPROOF_RUN_ID`, and
 `CHAINPROOF_CONTEXT_FILE`. The context path points to a mode-`0600` JSON file
@@ -100,6 +103,10 @@ an `observed` execution-envelope run from the ChainProof wrapper and an
 accepts the linkage marker when its parent run exists, uses the Codex harness,
 and belongs to the same mission. Neither record upgrades imported claims to
 observed evidence.
+
+Observed wrapper-run metadata records `lease_id` and `lease_holder`, connecting
+execution inspection to append-only coordination history without moving lease
+state into cryptographic proof v1.
 
 ## Create a checkpoint
 

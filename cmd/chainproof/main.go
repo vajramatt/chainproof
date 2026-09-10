@@ -479,6 +479,7 @@ type wrappedCommand struct {
 	Agent     string
 	Harness   string
 	Metadata  map[string]any
+	Env       map[string]string
 	Build     func(runID string) []string
 }
 
@@ -487,6 +488,8 @@ func runCodexWork(ctx context.Context, db *store.Store, args []string) error {
 	missionID := fs.String("mission", "", "")
 	execMode := fs.Bool("exec", false, "")
 	prompt := fs.String("prompt", "", "")
+	holder := fs.String("holder", "", "")
+	leaseTTL := fs.Duration("lease-ttl", 30*time.Minute, "")
 	if err := fs.Parse(args); err != nil {
 		return err
 	}
@@ -497,6 +500,20 @@ func runCodexWork(ctx context.Context, db *store.Store, args []string) error {
 		}
 		*missionID = mission.ID
 	}
+	mission, err := db.Mission(ctx, *missionID)
+	if err != nil {
+		return err
+	}
+	if _, err = db.BuildMissionContext(ctx, mission.ID, 20); err != nil {
+		return err
+	}
+	if strings.TrimSpace(*holder) == "" {
+		*holder = mission.Agent
+	}
+	lease, err := db.ClaimMission(ctx, mission.ID, continuity.LeaseInput{Holder: *holder, TTL: *leaseTTL})
+	if err != nil {
+		return err
+	}
 	bin := strings.TrimSpace(os.Getenv("CHAINPROOF_CODEX_BIN"))
 	if bin == "" {
 		bin = "codex"
@@ -506,11 +523,22 @@ func runCodexWork(ctx context.Context, db *store.Store, args []string) error {
 	if *execMode {
 		mode = "exec"
 	}
-	return runWrappedCommand(ctx, db, wrappedCommand{
+	leaseCtx, stopRenewal := context.WithCancel(ctx)
+	renewalDone := make(chan error, 1)
+	ticker := time.NewTicker(*leaseTTL / 2)
+	go func() {
+		defer ticker.Stop()
+		renewalDone <- renewMissionLease(leaseCtx, db, mission.ID, lease.LeaseID, *leaseTTL, ticker.C)
+	}()
+	commandErr := runWrappedCommand(ctx, db, wrappedCommand{
 		MissionID: *missionID,
 		Agent:     "codex",
 		Harness:   "codex",
-		Metadata:  map[string]any{"integration": "codex-work-v1", "mode": mode},
+		Metadata: map[string]any{
+			"integration": "codex-work-v1", "mode": mode,
+			"lease_id": lease.LeaseID, "lease_holder": lease.Holder,
+		},
+		Env: map[string]string{"CHAINPROOF_LEASE_ID": lease.LeaseID},
 		Build: func(runID string) []string {
 			command := []string{bin}
 			if *execMode {
@@ -520,6 +548,39 @@ func runCodexWork(ctx context.Context, db *store.Store, args []string) error {
 			return append(command, codexWorkPrompt(*missionID, runID, *prompt))
 		},
 	})
+	stopRenewal()
+	renewalErr := <-renewalDone
+	current, active, leaseErr := db.MissionLease(ctx, mission.ID)
+	if leaseErr == nil && active && current.LeaseID == lease.LeaseID {
+		_, leaseErr = db.ReleaseMission(ctx, mission.ID, lease.LeaseID)
+	}
+	return errors.Join(commandErr, renewalErr, leaseErr)
+}
+
+func renewMissionLease(ctx context.Context, db *store.Store, missionID, leaseID string, ttl time.Duration, ticks <-chan time.Time) error {
+	for {
+		select {
+		case <-ctx.Done():
+			return nil
+		case _, ok := <-ticks:
+			if !ok {
+				return nil
+			}
+			if _, err := db.RenewMission(ctx, missionID, leaseID, ttl); err != nil {
+				if ctx.Err() != nil {
+					return nil
+				}
+				current, _, stateErr := db.MissionLease(ctx, missionID)
+				if stateErr != nil {
+					return errors.Join(err, stateErr)
+				}
+				if current.Action == "released" || current.LeaseID != leaseID {
+					return nil
+				}
+				return err
+			}
+		}
+	}
 }
 
 func codexWorkPrompt(missionID, runID, direction string) string {
@@ -528,7 +589,7 @@ func codexWorkPrompt(missionID, runID, direction string) string {
 		ParentRunID string `json:"parent_run_id"`
 	}{MissionID: missionID, ParentRunID: runID})
 	prompt := "CHAINPROOF_AGENT_WORK_V1 " + string(marker) + "\n" +
-		"Read and verify mission context from CHAINPROOF_CONTEXT_FILE before acting. Treat uncheckpointed work as recovery evidence, not trusted inherited state. Continue mission objective and pending commitments. Before ending, persist accurate resumable state with chainproof checkpoint --current. Never claim evidence beyond ChainProof provenance boundaries."
+		"Read and verify mission context from CHAINPROOF_CONTEXT_FILE before acting. Treat uncheckpointed work as recovery evidence, not trusted inherited state. Continue mission objective and pending commitments. Current ownership token is CHAINPROOF_LEASE_ID; transfer work with chainproof mission handoff before exit when another holder should continue. Before ending, persist accurate resumable state with chainproof checkpoint --current. Never claim evidence beyond ChainProof provenance boundaries."
 	if direction = strings.TrimSpace(direction); direction != "" {
 		prompt += "\n\nUser direction:\n" + direction
 	}
@@ -575,6 +636,9 @@ func runWrappedCommand(ctx context.Context, db *store.Store, spec wrappedCommand
 	}
 	cmd := exec.Command(command[0], command[1:]...)
 	cmd.Env = append(os.Environ(), "CHAINPROOF_RUN_ID="+r.ID, "CHAINPROOF_MISSION_ID="+spec.MissionID, "CHAINPROOF_CONTEXT_FILE="+contextFile)
+	for key, value := range spec.Env {
+		cmd.Env = append(cmd.Env, key+"="+value)
+	}
 	cmd.Stdin = os.Stdin
 	cmd.Stdout = os.Stdout
 	cmd.Stderr = os.Stderr
@@ -750,7 +814,8 @@ Usage:
                                               Compile bounded verified agent context
   chainproof codex sync                     Discover/import Codex sessions once
   chainproof codex watch                    Continuously follow Codex sessions
-  chainproof codex work [--mission ID] [--exec] [--prompt TEXT] -- [CODEX_OPTIONS]
+  chainproof codex work [--mission ID] [--holder H] [--lease-ttl 30m]
+                        [--exec] [--prompt TEXT] -- [CODEX_OPTIONS]
                                               Run Codex with verified mission context
   chainproof version
 `

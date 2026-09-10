@@ -26,6 +26,7 @@ Invalid continuity stops invocation before a child process starts.
 | `CHAINPROOF_MISSION_ID` | durable mission identifier |
 | `CHAINPROOF_RUN_ID` | provenance run created for this invocation |
 | `CHAINPROOF_CONTEXT_FILE` | absolute path to compiled context JSON |
+| `CHAINPROOF_LEASE_ID` | optional current mission lease token supplied by native integrations |
 
 The context file is created with owner-only mode `0600` and is removed when the
 wrapper returns after process exit. Forced wrapper termination can prevent
@@ -49,7 +50,7 @@ and lets each integration decide how to place context in its model input.
 ## Native Codex profile
 
 ```sh
-chainproof codex work [--mission MISSION_ID] [--exec] [--prompt TEXT] -- [CODEX_OPTIONS]
+chainproof codex work [--mission MISSION_ID] [--holder HOLDER] [--lease-ttl 30m] [--exec] [--prompt TEXT] -- [CODEX_OPTIONS]
 ```
 
 This profile uses the generic child environment and injects a first-line
@@ -78,6 +79,12 @@ ChainProof wrapper              Codex                    Codex collector
 Wrapper run proves observed process lifecycle. Collector run proves continuity
 of imported Codex records. Linkage preserves both provenance modes; it does not
 merge events, deduplicate claims, or make imported evidence observed.
+
+Native Codex profile verifies continuity before atomically claiming mission
+lease. It renews at half-TTL intervals and releases only when same lease token
+still owns mission. A changed token indicates explicit handoff and is preserved.
+Lease ID and holder are recorded in wrapper-run metadata; this linkage remains
+local coordination state, not canonical proof material.
 
 ## Recovery rule
 

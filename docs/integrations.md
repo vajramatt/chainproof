@@ -19,7 +19,7 @@ are skipped, and fixtures must accompany parser changes.
 
 ```sh
 chainproof codex work --mission MISSION_ID
-chainproof codex work --exec --prompt "Continue pending work" -- --model MODEL
+chainproof codex work --holder WORKER --lease-ttl 30m --exec --prompt "Continue pending work" -- --model MODEL
 ```
 
 ChainProof starts an observed Codex execution envelope, compiles verified
@@ -27,6 +27,12 @@ mission context, and injects Agent Work Protocol instructions into the initial
 prompt. Codex receives the standard `CHAINPROOF_*` environment. The initial
 prompt tells it to read context before acting and write
 `chainproof checkpoint --current` before ending.
+
+Before launch, native runner claims mission lease. It renews at half-TTL
+intervals and supplies `CHAINPROOF_LEASE_ID` to Codex. Normal exit releases
+same token. Explicit handoff rotates token, so wrapper detects changed owner and
+does not release successor's lease. Run metadata retains original lease ID and
+holder for coordination lookup.
 
 The built-in collector later imports Codex's richer native session as a
 separate child run. Its `CHAINPROOF_AGENT_WORK_V1` marker is accepted only when
