@@ -150,7 +150,7 @@ if [ -z "$mission_id" ] || [ -z "$run_id" ]; then
 fi
 "$binary" append "$run_id" '{"kind":"clean.install.verified","payload":{"archive":true,"identity":true}}' >"$test_root/event.json"
 event_id=$(sed -n 's/.*"event_id": "\([^"]*\)".*/\1/p' "$test_root/event.json" | head -n 1)
-"$binary" search --run "$run_id" --kind clean.install.verified --mode reported --limit 1 >"$test_root/search.json"
+"$binary" search --mission "$mission_id" --kind clean.install.verified --mode reported --limit 1 >"$test_root/search.json"
 grep -F '"schema_version": "1"' "$test_root/search.json" >/dev/null
 grep -F "$event_id" "$test_root/search.json" >/dev/null
 "$binary" inspect event "$event_id" >"$test_root/inspect-event.json"

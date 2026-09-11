@@ -981,6 +981,7 @@ func capabilityDocument(dbPath string) any {
 
 func parseSearchQuery(args []string) (store.SearchQuery, error) {
 	fs := commandFlagSet("search")
+	missionID := fs.String("mission", "", "")
 	runID := fs.String("run", "", "")
 	agent := fs.String("agent", "", "")
 	kind := fs.String("kind", "", "")
@@ -992,17 +993,18 @@ func parseSearchQuery(args []string) (store.SearchQuery, error) {
 		return store.SearchQuery{}, err
 	}
 	query := store.SearchQuery{
-		Text:   strings.TrimSpace(strings.Join(fs.Args(), " ")),
-		RunID:  strings.TrimSpace(*runID),
-		Agent:  strings.TrimSpace(*agent),
-		Kind:   strings.TrimSpace(*kind),
-		Tool:   strings.TrimSpace(*tool),
-		Status: strings.TrimSpace(*status),
-		Mode:   strings.TrimSpace(*mode),
-		Limit:  *limit,
+		Text:      strings.TrimSpace(strings.Join(fs.Args(), " ")),
+		MissionID: strings.TrimSpace(*missionID),
+		RunID:     strings.TrimSpace(*runID),
+		Agent:     strings.TrimSpace(*agent),
+		Kind:      strings.TrimSpace(*kind),
+		Tool:      strings.TrimSpace(*tool),
+		Status:    strings.TrimSpace(*status),
+		Mode:      strings.TrimSpace(*mode),
+		Limit:     *limit,
 	}
-	if query.Text == "" && query.RunID == "" && query.Agent == "" && query.Kind == "" && query.Tool == "" && query.Status == "" && query.Mode == "" {
-		return store.SearchQuery{}, errors.New("usage: chainproof search [--run ID] [--agent NAME] [--kind KIND] [--tool TOOL] [--status STATUS] [--mode MODE] [--limit N] [QUERY]")
+	if query.Text == "" && query.MissionID == "" && query.RunID == "" && query.Agent == "" && query.Kind == "" && query.Tool == "" && query.Status == "" && query.Mode == "" {
+		return store.SearchQuery{}, errors.New("usage: chainproof search [--mission ID] [--run ID] [--agent NAME] [--kind KIND] [--tool TOOL] [--status STATUS] [--mode MODE] [--limit N] [QUERY]")
 	}
 	if query.Limit < 1 || query.Limit > 500 {
 		return store.SearchQuery{}, errors.New("search --limit must be between 1 and 500")

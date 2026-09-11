@@ -9,6 +9,7 @@ import (
 	"strings"
 	"testing"
 
+	"github.com/vajramatt/chainproof/internal/continuity"
 	"github.com/vajramatt/chainproof/internal/identity"
 	"github.com/vajramatt/chainproof/internal/proof"
 )
@@ -307,6 +308,48 @@ func TestSearchStructuredProvenance(t *testing.T) {
 	result, e = s.Search(ctx, SearchQuery{Text: "search.go", Kind: "artifact.changed"})
 	if e != nil || result.Total != 1 {
 		t.Fatalf("path search failed: %+v %v", result, e)
+	}
+}
+
+func TestSearchFiltersEvidenceAcrossMissionRuns(t *testing.T) {
+	s, err := Open(t.TempDir() + "/test.db")
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer s.Close()
+	ctx := context.Background()
+	mission, err := s.StartMission(ctx, continuity.MissionInput{Agent: "builder", Objective: "Investigate across sessions"})
+	if err != nil {
+		t.Fatal(err)
+	}
+	otherMission, err := s.StartMission(ctx, continuity.MissionInput{Agent: "builder", Objective: "Unrelated work"})
+	if err != nil {
+		t.Fatal(err)
+	}
+	wantedRuns := map[string]bool{}
+	for _, metadata := range []map[string]any{{"mission_id": mission.ID}, {"mission_id": mission.ID}, {"mission_id": otherMission.ID}} {
+		runRecord, startErr := s.Start(ctx, "builder", "codex", "gpt-test", metadata)
+		if startErr != nil {
+			t.Fatal(startErr)
+		}
+		if metadata["mission_id"] == mission.ID {
+			wantedRuns[runRecord.ID] = true
+		}
+		if _, appendErr := s.Append(ctx, runRecord.ID, proof.EventInput{Kind: "tool.result", Source: proof.Source{Adapter: "test", Mode: "observed"}, Payload: map[string]any{"tool": "shell", "status": "failed"}}); appendErr != nil {
+			t.Fatal(appendErr)
+		}
+	}
+	result, err := s.Search(ctx, SearchQuery{MissionID: mission.ID, Status: "failed", Limit: 10})
+	if err != nil {
+		t.Fatal(err)
+	}
+	if result.Total != 2 || len(result.Hits) != 2 || result.Query.MissionID != mission.ID {
+		t.Fatalf("mission search = %+v", result)
+	}
+	for _, hit := range result.Hits {
+		if !wantedRuns[hit.RunID] {
+			t.Fatalf("mission search leaked unrelated run: %+v", hit)
+		}
 	}
 }
 

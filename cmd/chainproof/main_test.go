@@ -234,7 +234,11 @@ func TestSearchCommandSupportsStructuredFiltersWithoutFreeText(t *testing.T) {
 	if err != nil {
 		t.Fatal(err)
 	}
-	runRecord, err := db.Start(context.Background(), "builder", "codex", "gpt-test", nil)
+	mission, err := db.StartMission(context.Background(), continuity.MissionInput{Agent: "builder", Objective: "Investigate across runs"})
+	if err != nil {
+		t.Fatal(err)
+	}
+	runRecord, err := db.Start(context.Background(), "builder", "codex", "gpt-test", map[string]any{"mission_id": mission.ID})
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -258,7 +262,7 @@ func TestSearchCommandSupportsStructuredFiltersWithoutFreeText(t *testing.T) {
 	}
 
 	raw := captureStdout(t, func() error {
-		return run([]string{"search", "--run", runRecord.ID, "--agent", "builder", "--kind", "tool.result", "--tool", "shell", "--status", "failed", "--mode", "observed", "--limit", "1"})
+		return run([]string{"search", "--mission", mission.ID, "--run", runRecord.ID, "--agent", "builder", "--kind", "tool.result", "--tool", "shell", "--status", "failed", "--mode", "observed", "--limit", "1"})
 	})
 	var result store.SearchResult
 	if err = json.Unmarshal([]byte(raw), &result); err != nil {
@@ -267,7 +271,7 @@ func TestSearchCommandSupportsStructuredFiltersWithoutFreeText(t *testing.T) {
 	if result.SchemaVersion != "1" || result.Total != 1 || len(result.Hits) != 1 || result.Hits[0].EventID != wanted.ID {
 		t.Fatalf("structured search = %s", raw)
 	}
-	if result.Query.Text != "" || result.Query.RunID != runRecord.ID || result.Query.Agent != "builder" || result.Query.Kind != "tool.result" || result.Query.Tool != "shell" || result.Query.Status != "failed" || result.Query.Mode != "observed" || result.Query.Limit != 1 {
+	if result.Query.Text != "" || result.Query.MissionID != mission.ID || result.Query.RunID != runRecord.ID || result.Query.Agent != "builder" || result.Query.Kind != "tool.result" || result.Query.Tool != "shell" || result.Query.Status != "failed" || result.Query.Mode != "observed" || result.Query.Limit != 1 {
 		t.Fatalf("search query not preserved: %+v", result.Query)
 	}
 

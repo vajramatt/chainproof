@@ -582,14 +582,16 @@ the shell:
 chainproof search "failed"
 chainproof search "internal/store/search.go"
 chainproof search "e4be0f5dbd629073"
+chainproof search --mission MISSION_ID --status failed
 chainproof search --run RUN_ID --status failed --tool shell
 chainproof inspect event EVENT_ID
 chainproof inspect run RUN_ID
 ```
 
-CLI and web interface combine free-text search with filters for run, agent,
-event kind, tool, status, and collection mode. CLI search accepts filters
-without free text and emits schema-versioned query, hits, total, and facets.
+CLI and web interface combine free-text search with filters for mission, run,
+agent, event kind, tool, status, and collection mode. Mission scope crosses
+every associated run and session. CLI search accepts filters without free text
+and emits schema-versioned query, hits, total, and facets.
 `inspect event` loads selected canonical payload and proof fields; `inspect run`
 loads run, proof status, and lineage. You can search tool names, paths, working
 directories, outcomes, and hashes even when message content is protected by

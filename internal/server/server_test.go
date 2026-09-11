@@ -116,10 +116,11 @@ func TestSearchAndEventEvidenceEndpoints(t *testing.T) {
 		t.Fatal(err)
 	}
 	defer db.Close()
-	run, _ := db.Start(context.Background(), "qwen", "opencode", "qwen3", nil)
+	mission, _ := db.StartMission(context.Background(), continuity.MissionInput{Agent: "qwen", Objective: "Investigate local evidence"})
+	run, _ := db.Start(context.Background(), "qwen", "opencode", "qwen3", map[string]any{"mission_id": mission.ID})
 	event, _ := db.Append(context.Background(), run.ID, proof.EventInput{Kind: "tool.result", Source: proof.Source{Mode: "observed", Adapter: "test"}, Payload: map[string]any{"tool": "shell", "status": "failed", "path": "mission.md"}})
 	app := New(db, "127.0.0.1:0", NewStatus("test"))
-	request := httptest.NewRequest(http.MethodGet, "http://localhost/api/search?q=mission.md&tool=shell", nil)
+	request := httptest.NewRequest(http.MethodGet, "http://localhost/api/search?q=mission.md&tool=shell&mission_id="+mission.ID, nil)
 	response := httptest.NewRecorder()
 	app.http.Handler.ServeHTTP(response, request)
 	if response.Code != http.StatusOK {
@@ -129,7 +130,7 @@ func TestSearchAndEventEvidenceEndpoints(t *testing.T) {
 	if err = json.NewDecoder(response.Body).Decode(&result); err != nil {
 		t.Fatal(err)
 	}
-	if result.SchemaVersion != "1" || result.Total != 1 || result.Hits[0].Status != "failed" {
+	if result.SchemaVersion != "1" || result.Query.MissionID != mission.ID || result.Total != 1 || result.Hits[0].Status != "failed" {
 		t.Fatalf("unexpected result: %+v", result)
 	}
 	request = httptest.NewRequest(http.MethodGet, "http://localhost/api/events/"+event.ID, nil)

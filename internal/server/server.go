@@ -278,7 +278,7 @@ func (s *Server) rejectRecovery(w http.ResponseWriter, r *http.Request) {
 func (s *Server) search(w http.ResponseWriter, r *http.Request) {
 	limit, _ := strconv.Atoi(r.URL.Query().Get("limit"))
 	query := store.SearchQuery{
-		Text: r.URL.Query().Get("q"), RunID: r.URL.Query().Get("run_id"),
+		Text: r.URL.Query().Get("q"), MissionID: r.URL.Query().Get("mission_id"), RunID: r.URL.Query().Get("run_id"),
 		Agent: r.URL.Query().Get("agent"), Kind: r.URL.Query().Get("kind"),
 		Tool: r.URL.Query().Get("tool"), Status: r.URL.Query().Get("status"),
 		Mode: r.URL.Query().Get("mode"), Limit: limit,

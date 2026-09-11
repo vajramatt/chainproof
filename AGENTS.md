@@ -84,8 +84,9 @@ formats, and release artifacts.
   available. This is side-effect-free.
 - Run `chainproof integration show codex|claude-code|openclaw|generic` to load
   exact lifecycle and provenance guidance for current harness.
-- Use structured `chainproof search` to find evidence, then `chainproof inspect
-  event EVENT_ID` to load canonical record before citing it.
+- Use `chainproof search --mission MISSION_ID` to find cross-session evidence,
+  then `chainproof inspect event EVENT_ID` to load canonical record before
+  citing it.
 - When `CHAINPROOF_MISSION_ID` is present, read verified context before acting
   and write `chainproof checkpoint --current CHECKPOINT.json` before ending
   useful work.

@@ -63,14 +63,16 @@ Agents can query same derived index without starting HTTP service:
 
 ```sh
 chainproof search --status failed --tool shell
+chainproof search --mission MISSION_ID --status failed
 chainproof search --run RUN_ID --kind tool.result "permission denied"
 chainproof inspect event EVENT_ID
 chainproof inspect run RUN_ID
 ```
 
-Structured search accepts `--run`, `--agent`, `--kind`, `--tool`, `--status`,
-`--mode`, and `--limit`; filters combine with AND and free text is optional when
-at least one filter is present. Result schema `1` returns normalized query,
+Structured search accepts `--mission`, `--run`, `--agent`, `--kind`, `--tool`,
+`--status`, `--mode`, and `--limit`; filters combine with AND and free text is
+optional when at least one filter is present. Mission scope covers every
+associated run across sessions. Result schema `1` returns normalized query,
 bounded hits, total, and facets. Each hit carries canonical `event_id` for
 follow-up inspection.
 
@@ -83,7 +85,7 @@ verification remain authority. See
 ## Local API
 
 ```text
-GET /api/search?q=failed&agent=chainproof&kind=tool.result&tool=shell&status=failed&mode=imported&limit=100
+GET /api/search?q=failed&mission_id=MISSION_ID&agent=chainproof&kind=tool.result&tool=shell&status=failed&mode=imported&limit=100
 GET /api/events/{event_id}
 GET /api/runs/{run_id}/lineage
 ```

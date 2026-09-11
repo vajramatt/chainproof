@@ -13,14 +13,15 @@ import (
 )
 
 type SearchQuery struct {
-	Text   string `json:"text,omitempty"`
-	RunID  string `json:"run_id,omitempty"`
-	Agent  string `json:"agent,omitempty"`
-	Kind   string `json:"kind,omitempty"`
-	Tool   string `json:"tool,omitempty"`
-	Status string `json:"status,omitempty"`
-	Mode   string `json:"mode,omitempty"`
-	Limit  int    `json:"limit"`
+	Text      string `json:"text,omitempty"`
+	MissionID string `json:"mission_id,omitempty"`
+	RunID     string `json:"run_id,omitempty"`
+	Agent     string `json:"agent,omitempty"`
+	Kind      string `json:"kind,omitempty"`
+	Tool      string `json:"tool,omitempty"`
+	Status    string `json:"status,omitempty"`
+	Mode      string `json:"mode,omitempty"`
+	Limit     int    `json:"limit"`
 }
 
 type SearchHit struct {
@@ -175,6 +176,10 @@ func (s *Store) Search(ctx context.Context, q SearchQuery) (SearchResult, error)
 		q.Limit = 100
 	}
 	where, args := []string{"1=1"}, []any{}
+	if q.MissionID != "" {
+		where = append(where, "run_id IN (SELECT run_id FROM mission_runs WHERE mission_id=? UNION SELECT run_id FROM runs WHERE json_extract(metadata,'$.mission_id')=?)")
+		args = append(args, q.MissionID, q.MissionID)
+	}
 	add := func(column, value string) {
 		if value != "" {
 			where = append(where, column+" = ? COLLATE NOCASE")

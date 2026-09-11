@@ -77,7 +77,7 @@ func catalog() map[string]Guide {
 	verifyTransfer := Step{Phase: "verify_transfer", Command: "chainproof mission workspace verify DIRECTORY", Purpose: "verify package offline before trusting or importing it"}
 	importTransfer := Step{Phase: "import_transfer", Command: "chainproof mission workspace import DIRECTORY", Purpose: "atomically rebuild mission and referenced artifacts in destination instance"}
 	resume := Step{Phase: "resume", Command: "chainproof resume MISSION_ID", Purpose: "load latest verified checkpoint after transfer or later session"}
-	searchEvidence := Step{Phase: "search_evidence", Command: "chainproof search --run RUN_ID QUERY", Purpose: "query derived index for relevant evidence inside one run"}
+	searchEvidence := Step{Phase: "search_evidence", Command: "chainproof search --mission MISSION_ID QUERY", Purpose: "query derived index across every run attached to durable mission"}
 	inspectEvidence := Step{Phase: "inspect_evidence", Command: "chainproof inspect event EVENT_ID", Purpose: "load canonical event and proof fields selected from search results"}
 	return map[string]Guide{
 		"codex": {

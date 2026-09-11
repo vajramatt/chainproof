@@ -28,7 +28,7 @@ func TestGuideCarriesCompleteAgentLifecycle(t *testing.T) {
 		}
 		foundSearch, foundInspection := false, false
 		for _, step := range guide.Lifecycle {
-			if step.Phase == "search_evidence" && step.Command == "chainproof search --run RUN_ID QUERY" {
+			if step.Phase == "search_evidence" && step.Command == "chainproof search --mission MISSION_ID QUERY" {
 				foundSearch = true
 			}
 			if step.Phase == "inspect_evidence" && step.Command == "chainproof inspect event EVENT_ID" {

@@ -8,12 +8,13 @@ boundary.
 ## Structured search
 
 ```sh
-chainproof search [--run ID] [--agent NAME] [--kind KIND] [--tool TOOL] \
-  [--status STATUS] [--mode MODE] [--limit N] [QUERY]
+chainproof search [--mission ID] [--run ID] [--agent NAME] [--kind KIND] \
+  [--tool TOOL] [--status STATUS] [--mode MODE] [--limit N] [QUERY]
 ```
 
 Flags precede optional free text. At least one filter or non-empty query is
-required. `--limit` accepts 1 through 500. `--mode` accepts `observed`,
+required. `--mission` selects every run attached to durable mission across
+sessions. `--limit` accepts 1 through 500. `--mode` accepts `observed`,
 `reported`, `imported`, or `derived`. Filters combine with AND.
 
 Successful output contains:
@@ -26,6 +27,10 @@ Successful output contains:
 
 Search hits are navigation data, not evidence. Consumers SHOULD follow a hit
 with canonical inspection before citing its payload or proof fields.
+
+Mission membership comes from canonical `mission_runs` associations or run
+metadata used by current Agent Work Protocol. It is query scope, not part of
+event hash. Combining `--mission` and `--run` requires both filters to match.
 
 ## Canonical event inspection
 
