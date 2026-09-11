@@ -23,6 +23,7 @@ import (
 	backupstore "github.com/vajramatt/chainproof/internal/backup"
 	"github.com/vajramatt/chainproof/internal/continuity"
 	"github.com/vajramatt/chainproof/internal/identity"
+	"github.com/vajramatt/chainproof/internal/integrationguide"
 	"github.com/vajramatt/chainproof/internal/missionworkspace"
 	"github.com/vajramatt/chainproof/internal/proof"
 	"github.com/vajramatt/chainproof/internal/server"
@@ -155,6 +156,33 @@ func run(args []string) error {
 			return err
 		}
 		return output(capabilityDocument(dbPath), nil)
+	}
+	if args[0] == "integration" {
+		if len(args) < 2 {
+			return errors.New("usage: chainproof integration list|show HARNESS")
+		}
+		switch args[1] {
+		case "list":
+			if len(args) != 2 {
+				return errors.New("usage: chainproof integration list")
+			}
+			return output(struct {
+				SchemaVersion string                     `json:"schema_version"`
+				Format        string                     `json:"format"`
+				Integrations  []integrationguide.Summary `json:"integrations"`
+			}{"1", integrationguide.Format, integrationguide.List()}, nil)
+		case "show":
+			if len(args) != 3 {
+				return errors.New("usage: chainproof integration show HARNESS")
+			}
+			guide, guideErr := integrationguide.Show(args[2])
+			if guideErr != nil {
+				return errors.New("usage: chainproof integration show codex|claude-code|openclaw|generic")
+			}
+			return output(guide, nil)
+		default:
+			return errors.New("usage: chainproof integration list|show HARNESS")
+		}
 	}
 	if args[0] == "doctor" {
 		return runDoctor(args[1:])
@@ -869,7 +897,7 @@ func run(args []string) error {
 func knownCommand(name string) bool {
 	switch name {
 	case "version", "--version", "help", "--help", "-h",
-		"capabilities", "doctor", "verify-file", "verify-continuity-file",
+		"capabilities", "integration", "doctor", "verify-file", "verify-continuity-file",
 		"service", "agent", "whoami", "init", "backup", "restore", "mission", "start",
 		"append", "ingest", "pull", "complete", "verify", "export",
 		"list", "search", "checkpoint", "resume", "context", "recovery",
@@ -912,10 +940,11 @@ func capabilityDocument(dbPath string) any {
 			"agent_identity":    "chainproof.agent.v1",
 			"agent_work":        "chainproof.agent-work.v1",
 			"continuity":        "chainproof.continuity.bundle.v1",
+			"integration_guide": integrationguide.Format,
 			"mission_workspace": missionworkspace.Format,
 			"provenance":        "chainproof.bundle.v1",
 		},
-		Features: []string{"agent_identity", "artifact_store", "codex_collector", "codex_work", "continuity_proofs", "independent_process_coordination", "instance_backup_restore", "integration_pull", "integration_push", "local_api", "machine_readable_doctor", "machine_readable_init", "mission_import", "mission_leases", "mission_recovery", "mission_workspaces", "missions", "process_wrap", "provenance_proofs", "search", "stable_exit_codes", "structured_errors", "tui", "web_explorer"},
+		Features: []string{"agent_identity", "artifact_store", "codex_collector", "codex_work", "continuity_proofs", "independent_process_coordination", "instance_backup_restore", "integration_guides", "integration_pull", "integration_push", "local_api", "machine_readable_doctor", "machine_readable_init", "mission_import", "mission_leases", "mission_recovery", "mission_workspaces", "missions", "process_wrap", "provenance_proofs", "search", "stable_exit_codes", "structured_errors", "tui", "web_explorer"},
 	}
 }
 
@@ -1371,6 +1400,8 @@ const usage = `ChainProof — durable continuity and provenance for AI agents
 Usage:
   chainproof [--json-errors] COMMAND         Emit versioned JSON on failure
   chainproof capabilities [--json]          Describe shipped machine capabilities
+  chainproof integration list               List bundled harness lifecycle profiles
+  chainproof integration show HARNESS       Print agent-readable lifecycle guide
   chainproof init [--json]                   Initialize local state and identity
   chainproof doctor [--json]                 Diagnose local state without creating it
   chainproof backup BACKUP_DIR               Snapshot ledger and all local identities

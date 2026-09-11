@@ -76,6 +76,19 @@ formats, and release artifacts.
 - Update tests and documentation with behavior changes.
 - Do not edit generated release artifacts directly.
 
+## Agent continuity
+
+- For substantial work, run `chainproof capabilities --json` when binary is
+  available. This is side-effect-free.
+- Run `chainproof integration show codex|claude-code|openclaw|generic` to load
+  exact lifecycle and provenance guidance for current harness.
+- When `CHAINPROOF_MISSION_ID` is present, read verified context before acting
+  and write `chainproof checkpoint --current CHECKPOINT.json` before ending
+  useful work.
+- Preserve provenance boundary in dogfood records: tool results directly seen
+  by ChainProof may be `observed`; agent summaries and judgments are
+  `reported`; collected histories remain `imported`.
+
 ## Validation
 
 ```sh

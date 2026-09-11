@@ -63,6 +63,8 @@ Current `main` contains the agent-first continuity loop:
 - verified filesystem mission workspaces containing continuity JSON,
   deterministic event JSONL and Markdown views, manifest checksums, and
   referenced content-addressed artifacts
+- side-effect-free, machine-readable lifecycle guides for Codex, Claude Code,
+  OpenClaw, and generic local harnesses
 - mission, checkpoint, lease, context, and recovery access through the CLI, localhost API,
   TUI, and embedded read-only web explorer where appropriate
 - side-effect-free `capabilities --json` and `doctor --json` discovery plus
@@ -135,9 +137,10 @@ explorer, and loopback API. Broader unattended use needs these release gates:
    Markdown views, and referenced artifact bodies. Import rebuilds mission,
    run, event, checkpoint, search, and artifact state in one transaction,
    without trusting source database or copying identity and lease state.
-5. **Integration packaging.** Ship agent-readable setup and lifecycle guidance
-   for Codex, Claude Code, OpenClaw, and generic harnesses. Each integration
-   must preserve provenance mode and same local trust boundary.
+5. **Integration packaging.** Current `main` ships side-effect-free
+   `chainproof integration list|show` profiles for Codex, Claude Code,
+   OpenClaw, and generic harnesses. Guides state exact lifecycle commands,
+   environment, provenance modes, limitations, and canonical source docs.
 
 Target autonomous lifecycle:
 
@@ -145,10 +148,10 @@ Target autonomous lifecycle:
 discover → identify → inspect → acquire → work → checkpoint → verify → transfer → resume
 ```
 
-Current `main` has passed machine-readable bootstrap, multi-process and crash
-tests, clean-install validation, and portable workspace rehydration. Next
-release work can package these capabilities while integration packaging
-continues.
+Current `main` has passed all five source gates: machine-readable bootstrap,
+multi-process and crash tests, clean-install validation, portable workspace
+rehydration, and bundled integration guides. Next release work can package
+these capabilities. Richer native integrations remain later product work.
 Signed attestations, key recovery, and private multi-host coordination follow;
 they are not prerequisites for local cooperative use. Publicly exposing the
 unauthenticated loopback service is not part of this path.
@@ -182,6 +185,8 @@ Agents using current `main` can bootstrap without parsing human output:
 chainproof capabilities --json
 chainproof init --json
 chainproof doctor --json
+chainproof integration list
+chainproof integration show codex
 ```
 
 See [`docs/agent-bootstrap.md`](docs/agent-bootstrap.md) for field and
@@ -762,6 +767,8 @@ It does not edit the repositories or harness histories it observes.
 | --- | --- |
 | `chainproof --json-errors COMMAND` | request one versioned JSON error document and stable exit class |
 | `chainproof capabilities --json` | describe current build, paths, protocols, and shipped features without creating state |
+| `chainproof integration list` | list bundled harness lifecycle profiles without creating state |
+| `chainproof integration show` | print exact lifecycle, environment, provenance, and limitations |
 | `chainproof init --json` | idempotently initialize ledger and stable local identity |
 | `chainproof doctor --json` | diagnose platform, ledger, permissions, identity, and loopback API without creating state |
 | `chainproof backup BACKUP_DIR` | create verified full-instance backup without stopping writers |

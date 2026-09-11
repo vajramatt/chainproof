@@ -3,6 +3,23 @@
 ChainProof accepts data through a built-in Codex collector and three generic
 integration modes.
 
+## Agent-readable guide discovery
+
+```sh
+chainproof integration list
+chainproof integration show codex
+chainproof integration show claude-code
+chainproof integration show openclaw
+chainproof integration show generic
+```
+
+These commands emit `chainproof.integration-guide.v1` JSON and create no
+ledger, identity, or other local state. Each bundled profile supplies ordered
+bootstrap, work, checkpoint, transfer, and resume commands; relevant
+`CHAINPROOF_*` environment; provenance boundary; current limitations; and
+canonical first-party guide URL. Capability discovery advertises both
+`integration_guides` and protocol format.
+
 ## Built-in Codex collector
 
 The default TUI and server discover and follow `~/.codex/sessions/**/*.jsonl`.

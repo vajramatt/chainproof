@@ -20,6 +20,7 @@ import (
 	backupstore "github.com/vajramatt/chainproof/internal/backup"
 	"github.com/vajramatt/chainproof/internal/continuity"
 	"github.com/vajramatt/chainproof/internal/identity"
+	"github.com/vajramatt/chainproof/internal/integrationguide"
 	"github.com/vajramatt/chainproof/internal/missionworkspace"
 	"github.com/vajramatt/chainproof/internal/proof"
 	"github.com/vajramatt/chainproof/internal/service"
@@ -189,12 +190,40 @@ func TestCapabilitiesJSONDescribesCurrentBuild(t *testing.T) {
 	if capabilities.Network["default_url"] != "http://127.0.0.1:7331" || capabilities.Network["listen_scope"] != "loopback" || capabilities.Network["authentication"] != "none" {
 		t.Fatalf("unexpected capability network boundary: %s", capabilitiesJSON)
 	}
-	if capabilities.Protocols["provenance"] != "chainproof.bundle.v1" || capabilities.Protocols["continuity"] != "chainproof.continuity.bundle.v1" || capabilities.Protocols["agent_work"] != "chainproof.agent-work.v1" || capabilities.Protocols["agent_identity"] != "chainproof.agent.v1" || capabilities.Protocols["mission_workspace"] != missionworkspace.Format {
+	if capabilities.Protocols["provenance"] != "chainproof.bundle.v1" || capabilities.Protocols["continuity"] != "chainproof.continuity.bundle.v1" || capabilities.Protocols["agent_work"] != "chainproof.agent-work.v1" || capabilities.Protocols["agent_identity"] != "chainproof.agent.v1" || capabilities.Protocols["mission_workspace"] != missionworkspace.Format || capabilities.Protocols["integration_guide"] != integrationguide.Format {
 		t.Fatalf("unexpected capability protocols: %s", capabilitiesJSON)
 	}
-	wantFeatures := []string{"agent_identity", "artifact_store", "codex_collector", "codex_work", "continuity_proofs", "independent_process_coordination", "instance_backup_restore", "integration_pull", "integration_push", "local_api", "machine_readable_doctor", "machine_readable_init", "mission_import", "mission_leases", "mission_recovery", "mission_workspaces", "missions", "process_wrap", "provenance_proofs", "search", "stable_exit_codes", "structured_errors", "tui", "web_explorer"}
+	wantFeatures := []string{"agent_identity", "artifact_store", "codex_collector", "codex_work", "continuity_proofs", "independent_process_coordination", "instance_backup_restore", "integration_guides", "integration_pull", "integration_push", "local_api", "machine_readable_doctor", "machine_readable_init", "mission_import", "mission_leases", "mission_recovery", "mission_workspaces", "missions", "process_wrap", "provenance_proofs", "search", "stable_exit_codes", "structured_errors", "tui", "web_explorer"}
 	if !reflect.DeepEqual(capabilities.Features, wantFeatures) {
 		t.Fatalf("features = %v, want %v", capabilities.Features, wantFeatures)
+	}
+}
+
+func TestIntegrationGuidesAreSideEffectFreeAndMachineReadable(t *testing.T) {
+	dbPath := filepath.Join(t.TempDir(), "must-not-exist.db")
+	t.Setenv("CHAINPROOF_DB", dbPath)
+	listJSON := captureStdout(t, func() error { return run([]string{"integration", "list"}) })
+	var catalog struct {
+		SchemaVersion string                     `json:"schema_version"`
+		Format        string                     `json:"format"`
+		Integrations  []integrationguide.Summary `json:"integrations"`
+	}
+	if err := json.Unmarshal([]byte(listJSON), &catalog); err != nil {
+		t.Fatal(err)
+	}
+	if catalog.SchemaVersion != "1" || catalog.Format != integrationguide.Format || len(catalog.Integrations) != 4 {
+		t.Fatalf("integration list = %s", listJSON)
+	}
+	guideJSON := captureStdout(t, func() error { return run([]string{"integration", "show", "codex"}) })
+	var guide integrationguide.Guide
+	if err := json.Unmarshal([]byte(guideJSON), &guide); err != nil {
+		t.Fatal(err)
+	}
+	if guide.ID != "codex" || guide.Mode != "native" || len(guide.Lifecycle) < 5 {
+		t.Fatalf("Codex guide = %s", guideJSON)
+	}
+	if _, err := os.Lstat(dbPath); !errors.Is(err, os.ErrNotExist) {
+		t.Fatalf("integration discovery created state: %v", err)
 	}
 }
 

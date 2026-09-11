@@ -27,13 +27,19 @@ Top-level fields:
 - `paths`: resolved `ledger` and `agent_home`
 - `network`: fixed local API URL, `loopback` listen scope, and `none`
   authentication mode
-- `protocols`: exact provenance, continuity, mission workspace, Agent Work, and
-  identity format IDs
+- `protocols`: exact provenance, continuity, mission workspace, integration
+  guide, Agent Work, and identity format IDs
 - `features`: sorted identifiers for behavior compiled into this binary
 
 Capability output never claims planned behavior. Current `main` advertises
-`mission_import` and `mission_workspaces`; signed attestations, key recovery,
-and multi-host coordination remain absent until implemented.
+`mission_import`, `mission_workspaces`, and `integration_guides`; signed
+attestations, key recovery, and multi-host coordination remain absent until
+implemented.
+
+`chainproof integration list` and `chainproof integration show HARNESS` are
+also side-effect-free. They return bundled lifecycle profiles for `codex`,
+`claude-code`, `openclaw`, and `generic` using
+`chainproof.integration-guide.v1`.
 
 ## Initialize state
 

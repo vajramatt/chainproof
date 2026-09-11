@@ -113,6 +113,12 @@ stage=bootstrap
 grep -F '"product": "chainproof"' "$test_root/capabilities.json" >/dev/null
 grep -F '"mission_import"' "$test_root/capabilities.json" >/dev/null
 grep -F '"mission_workspaces"' "$test_root/capabilities.json" >/dev/null
+grep -F '"integration_guides"' "$test_root/capabilities.json" >/dev/null
+"$binary" integration list >"$test_root/integrations.json"
+grep -F '"id": "codex"' "$test_root/integrations.json" >/dev/null
+grep -F '"id": "claude-code"' "$test_root/integrations.json" >/dev/null
+"$binary" integration show generic >"$test_root/generic-integration.json"
+grep -F '"format": "chainproof.integration-guide.v1"' "$test_root/generic-integration.json" >/dev/null
 if [ -e "$HOME/.chainproof" ]; then
   echo "capability discovery created local state" >&2
   exit 1

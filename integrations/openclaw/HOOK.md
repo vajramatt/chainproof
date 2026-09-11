@@ -10,6 +10,12 @@ metadata:
 
 # ChainProof for OpenClaw
 
+Inspect bundled machine-readable lifecycle first:
+
+```sh
+chainproof integration show openclaw
+```
+
 Start `chainproof serve`, then install this directory as an OpenClaw hook. No
 account or API key is required. The hook sends events only to
 `http://127.0.0.1:7331` by default.
