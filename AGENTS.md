@@ -36,6 +36,9 @@ formats, and release artifacts.
 - Keep machine-readable bootstrap idempotent and side-effect boundaries exact:
   capability discovery and diagnostics must not initialize state, while
   initialization must converge on same stable local identity.
+- Keep structured CLI errors versioned and single-document JSON. Preserve
+  stable exit classes, silence parser diagnostics in JSON mode, and keep
+  unknown commands side-effect-free.
 - Make user services preserve resolved ledger, identity, and collector paths
   across login. Persist only explicit ChainProof configuration; never copy
   ambient environment variables or credentials into service definitions.

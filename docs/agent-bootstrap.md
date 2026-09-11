@@ -84,9 +84,37 @@ core ChainProof tables. Identity diagnosis validates public profile fingerprint
 and confirms matching local private key without creating either file. Stopped
 loopback API reports `inactive` and does not make otherwise healthy state fail.
 
-Until stable exit codes land, consumers must treat JSON `status` and individual
-check statuses as authoritative. Structured error output and stable nonzero exit
-codes remain release gates.
+Doctor health is data rather than command failure. Consumers must treat report
+`status` and individual check statuses as authoritative; a successfully emitted
+report exits `0` even when status is `uninitialized` or `attention`.
+
+## Structured failures
+
+Commands containing `--json` automatically emit failures as one JSON document
+on stderr. Pass global `--json-errors` anywhere before a child-command `--`
+separator for same contract; flag is removed before command dispatch and does
+not change successful output or child arguments.
+
+```json
+{
+  "schema_version": "1",
+  "error": {
+    "code": "usage",
+    "message": "unknown command \"inspectt\"",
+    "exit_code": 2
+  }
+}
+```
+
+Stable exit classes:
+
+- `0`: command executed and produced its result
+- `1`, `command_failed`: command could not complete
+- `2`, `usage`: arguments or command name are invalid
+- `3`, `verification_failed`: proof verification rejected input
+
+Flag parsing is quiet, so structured stderr is never prefixed by parser prose.
+Unknown commands are rejected before database or identity initialization.
 
 ## Keep configured state across login
 

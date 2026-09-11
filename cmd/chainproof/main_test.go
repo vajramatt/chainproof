@@ -1,6 +1,7 @@
 package main
 
 import (
+	"bytes"
 	"context"
 	"encoding/json"
 	"errors"
@@ -20,6 +21,95 @@ import (
 	"github.com/vajramatt/chainproof/internal/service"
 	"github.com/vajramatt/chainproof/internal/store"
 )
+
+func TestPrepareCommandArgsEnablesStructuredErrors(t *testing.T) {
+	args, structured, err := prepareCommandArgs([]string{"--json-errors", "mission", "list"})
+	if err != nil {
+		t.Fatal(err)
+	}
+	if !structured || !reflect.DeepEqual(args, []string{"mission", "list"}) {
+		t.Fatalf("prepareCommandArgs() = %v, %t", args, structured)
+	}
+
+	args, structured, err = prepareCommandArgs([]string{"init", "--json"})
+	if err != nil || !structured || !reflect.DeepEqual(args, []string{"init", "--json"}) {
+		t.Fatalf("JSON command did not imply structured errors: %v, %t, %v", args, structured, err)
+	}
+
+	args, structured, err = prepareCommandArgs([]string{"run", "--", "worker", "--json-errors"})
+	if err != nil || structured || !reflect.DeepEqual(args, []string{"run", "--", "worker", "--json-errors"}) {
+		t.Fatalf("child flag was consumed: %v, %t, %v", args, structured, err)
+	}
+}
+
+func TestStructuredCommandErrorContract(t *testing.T) {
+	tests := []struct {
+		name     string
+		err      error
+		wantCode string
+		wantExit int
+	}{
+		{name: "usage", err: errors.New(`unknown command "bogus"`), wantCode: "usage", wantExit: 2},
+		{name: "verification", err: errors.New("verification failed"), wantCode: "verification_failed", wantExit: 3},
+		{name: "command", err: errors.New("database is locked"), wantCode: "command_failed", wantExit: 1},
+	}
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			var output bytes.Buffer
+			if got := reportCommandError(&output, tt.err, true); got != tt.wantExit {
+				t.Fatalf("exit = %d, want %d", got, tt.wantExit)
+			}
+			var envelope struct {
+				SchemaVersion string `json:"schema_version"`
+				Error         struct {
+					Code     string `json:"code"`
+					Message  string `json:"message"`
+					ExitCode int    `json:"exit_code"`
+				} `json:"error"`
+			}
+			if err := json.Unmarshal(output.Bytes(), &envelope); err != nil {
+				t.Fatalf("error output is not one JSON document: %q: %v", output.String(), err)
+			}
+			if envelope.SchemaVersion != "1" || envelope.Error.Code != tt.wantCode || envelope.Error.Message != tt.err.Error() || envelope.Error.ExitCode != tt.wantExit {
+				t.Fatalf("unexpected envelope: %+v", envelope)
+			}
+		})
+	}
+}
+
+func TestPlainCommandErrorRemainsHumanReadable(t *testing.T) {
+	var output bytes.Buffer
+	if got := reportCommandError(&output, errors.New("database is locked"), false); got != 1 {
+		t.Fatalf("exit = %d", got)
+	}
+	if output.String() != "chainproof: database is locked\n" {
+		t.Fatalf("plain error = %q", output.String())
+	}
+}
+
+func TestJSONFlagParsingDoesNotPolluteStderr(t *testing.T) {
+	stderr, err := captureStderr(t, func() error {
+		return run([]string{"capabilities", "--json", "--unknown"})
+	})
+	if err == nil {
+		t.Fatal("expected unknown flag error")
+	}
+	if stderr != "" {
+		t.Fatalf("flag parser polluted structured stderr: %q", stderr)
+	}
+}
+
+func TestUnknownCommandDoesNotInitializeState(t *testing.T) {
+	root := filepath.Join(t.TempDir(), "missing")
+	t.Setenv("CHAINPROOF_DB", filepath.Join(root, "chainproof.db"))
+	err := run([]string{"bogus"})
+	if err == nil || !strings.Contains(err.Error(), "unknown command") {
+		t.Fatalf("unexpected error: %v", err)
+	}
+	if _, statErr := os.Stat(root); !errors.Is(statErr, os.ErrNotExist) {
+		t.Fatalf("unknown command initialized state: %v", statErr)
+	}
+}
 
 func TestConfiguredServicePreservesResolvedState(t *testing.T) {
 	root := t.TempDir()
@@ -91,7 +181,7 @@ func TestCapabilitiesJSONDescribesCurrentBuild(t *testing.T) {
 	if capabilities.Protocols["provenance"] != "chainproof.bundle.v1" || capabilities.Protocols["continuity"] != "chainproof.continuity.bundle.v1" || capabilities.Protocols["agent_work"] != "chainproof.agent-work.v1" || capabilities.Protocols["agent_identity"] != "chainproof.agent.v1" {
 		t.Fatalf("unexpected capability protocols: %s", capabilitiesJSON)
 	}
-	wantFeatures := []string{"agent_identity", "artifact_store", "codex_collector", "codex_work", "continuity_proofs", "integration_pull", "integration_push", "local_api", "machine_readable_doctor", "machine_readable_init", "mission_leases", "mission_recovery", "missions", "process_wrap", "provenance_proofs", "search", "tui", "web_explorer"}
+	wantFeatures := []string{"agent_identity", "artifact_store", "codex_collector", "codex_work", "continuity_proofs", "integration_pull", "integration_push", "local_api", "machine_readable_doctor", "machine_readable_init", "mission_leases", "mission_recovery", "missions", "process_wrap", "provenance_proofs", "search", "stable_exit_codes", "structured_errors", "tui", "web_explorer"}
 	if !reflect.DeepEqual(capabilities.Features, wantFeatures) {
 		t.Fatalf("features = %v, want %v", capabilities.Features, wantFeatures)
 	}
@@ -1126,6 +1216,27 @@ func captureStdout(t *testing.T, action func() error) string {
 		t.Fatal(actionErr)
 	}
 	return string(body)
+}
+
+func captureStderr(t *testing.T, action func() error) (string, error) {
+	t.Helper()
+	read, write, err := os.Pipe()
+	if err != nil {
+		t.Fatal(err)
+	}
+	original := os.Stderr
+	os.Stderr = write
+	actionErr := action()
+	os.Stderr = original
+	if err = write.Close(); err != nil {
+		t.Fatal(err)
+	}
+	body, err := io.ReadAll(read)
+	read.Close()
+	if err != nil {
+		t.Fatal(err)
+	}
+	return string(body), actionErr
 }
 
 func stringValueForTest(value any) string {

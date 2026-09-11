@@ -2,7 +2,6 @@ package main
 
 import (
 	"errors"
-	"flag"
 	"fmt"
 	"os"
 	"runtime"
@@ -31,7 +30,7 @@ type doctorCheck struct {
 }
 
 func runDoctor(args []string) error {
-	fs := flag.NewFlagSet("doctor", flag.ContinueOnError)
+	fs := commandFlagSet("doctor")
 	_ = fs.Bool("json", false, "")
 	if err := fs.Parse(args); err != nil {
 		return err

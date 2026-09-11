@@ -103,10 +103,10 @@ explorer, and loopback API. Broader unattended use needs these release gates:
 
 1. **Machine-readable bootstrap.** Current `main` includes side-effect-free
    `chainproof capabilities --json` and `chainproof doctor --json` plus
-   idempotent `chainproof init --json`. Stable exit codes and structured errors
-   remain before release. An agent must be able to discover installed features,
-   create or load identity, inspect available work, and diagnose its environment
-   without parsing prose.
+   idempotent `chainproof init --json`, versioned structured errors, and stable
+   exit classes. An agent can discover installed features, create or load
+   identity, inspect available work, and diagnose its environment without
+   parsing prose.
 2. **Process and failure hardening.** Test independent OS processes sharing one
    database, WAL recovery after forced termination, interrupted checkpoints,
    expired leases, corrupted profiles, lost keys, database upgrades, and
@@ -170,6 +170,12 @@ chainproof doctor --json
 
 See [`docs/agent-bootstrap.md`](docs/agent-bootstrap.md) for field and
 side-effect contracts. These commands are newer than release `v0.6.0`.
+
+Commands using `--json` automatically return failures as one versioned JSON
+document on stderr. Add global `--json-errors` to any other invocation when an
+agent needs same contract. Exit `1` means command failure, `2` means usage
+error, and `3` means proof verification failure. Doctor health remains in its
+JSON `status`; successful diagnosis exits `0` even when state needs attention.
 
 The installer verifies the release archive against its published SHA-256
 checksum. The database opens at `~/.chainproof/chainproof.db`; set
@@ -667,6 +673,7 @@ It does not edit the repositories or harness histories it observes.
 
 | command | what |
 | --- | --- |
+| `chainproof --json-errors COMMAND` | request one versioned JSON error document and stable exit class |
 | `chainproof capabilities --json` | describe current build, paths, protocols, and shipped features without creating state |
 | `chainproof init --json` | idempotently initialize ledger and stable local identity |
 | `chainproof doctor --json` | diagnose platform, ledger, permissions, identity, and loopback API without creating state |

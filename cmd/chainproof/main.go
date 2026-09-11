@@ -32,14 +32,90 @@ import (
 var version = "development"
 
 func main() {
-	if err := run(os.Args[1:]); err != nil {
-		fmt.Fprintln(os.Stderr, "chainproof:", err)
-		os.Exit(1)
+	args, structuredErrors, err := prepareCommandArgs(os.Args[1:])
+	if err == nil {
+		err = run(args)
+	}
+	if err != nil {
+		os.Exit(reportCommandError(os.Stderr, err, structuredErrors))
 	}
 }
+
+func prepareCommandArgs(args []string) ([]string, bool, error) {
+	clean := make([]string, 0, len(args))
+	structured := false
+	passthrough := false
+	for _, arg := range args {
+		if passthrough {
+			clean = append(clean, arg)
+			continue
+		}
+		if arg == "--" {
+			passthrough = true
+			clean = append(clean, arg)
+			continue
+		}
+		switch arg {
+		case "--json-errors":
+			structured = true
+		case "--json":
+			structured = true
+			clean = append(clean, arg)
+		default:
+			clean = append(clean, arg)
+		}
+	}
+	if structured && len(clean) == 0 {
+		return nil, true, errors.New("usage: chainproof [--json-errors] COMMAND")
+	}
+	return clean, structured, nil
+}
+
+func reportCommandError(writer io.Writer, err error, structured bool) int {
+	code, exitCode := classifyCommandError(err)
+	if !structured {
+		fmt.Fprintln(writer, "chainproof:", err)
+		return exitCode
+	}
+	envelope := struct {
+		SchemaVersion string `json:"schema_version"`
+		Error         struct {
+			Code     string `json:"code"`
+			Message  string `json:"message"`
+			ExitCode int    `json:"exit_code"`
+		} `json:"error"`
+	}{SchemaVersion: "1"}
+	envelope.Error.Code = code
+	envelope.Error.Message = err.Error()
+	envelope.Error.ExitCode = exitCode
+	_ = json.NewEncoder(writer).Encode(envelope)
+	return exitCode
+}
+
+func classifyCommandError(err error) (string, int) {
+	message := strings.ToLower(strings.TrimSpace(err.Error()))
+	switch {
+	case errors.Is(err, flag.ErrHelp), strings.HasPrefix(message, "usage:"), strings.HasPrefix(message, "unknown command"), strings.Contains(message, "flag provided but not defined"):
+		return "usage", 2
+	case strings.Contains(message, "verification failed"):
+		return "verification_failed", 3
+	default:
+		return "command_failed", 1
+	}
+}
+
+func commandFlagSet(name string) *flag.FlagSet {
+	fs := flag.NewFlagSet(name, flag.ContinueOnError)
+	fs.SetOutput(io.Discard)
+	return fs
+}
+
 func run(args []string) error {
 	if len(args) == 0 {
 		args = []string{"ui"}
+	}
+	if !knownCommand(args[0]) {
+		return fmt.Errorf("unknown command %q", args[0])
 	}
 	if args[0] == "version" || args[0] == "--version" {
 		fmt.Println("chainproof", version)
@@ -50,7 +126,7 @@ func run(args []string) error {
 		return nil
 	}
 	if args[0] == "capabilities" {
-		fs := flag.NewFlagSet("capabilities", flag.ContinueOnError)
+		fs := commandFlagSet("capabilities")
 		_ = fs.Bool("json", false, "")
 		if err := fs.Parse(args[1:]); err != nil {
 			return err
@@ -119,7 +195,7 @@ func run(args []string) error {
 		return manageAgent(dbPath, args[1:])
 	}
 	if args[0] == "whoami" {
-		fs := flag.NewFlagSet("whoami", flag.ContinueOnError)
+		fs := commandFlagSet("whoami")
 		profileName := fs.String("profile", selectedAgentProfile(), "")
 		if e := fs.Parse(args[1:]); e != nil {
 			return e
@@ -135,7 +211,7 @@ func run(args []string) error {
 	ctx := context.Background()
 	switch args[0] {
 	case "init":
-		fs := flag.NewFlagSet("init", flag.ContinueOnError)
+		fs := commandFlagSet("init")
 		jsonOutput := fs.Bool("json", false, "")
 		if e = fs.Parse(args[1:]); e != nil {
 			return e
@@ -163,7 +239,7 @@ func run(args []string) error {
 		}
 		switch args[1] {
 		case "start":
-			fs := flag.NewFlagSet("mission start", flag.ContinueOnError)
+			fs := commandFlagSet("mission start")
 			agent := fs.String("agent", "", "")
 			objective := fs.String("objective", "", "")
 			role := fs.String("role", strings.TrimSpace(os.Getenv("CHAINPROOF_AGENT_ROLE")), "")
@@ -191,7 +267,7 @@ func run(args []string) error {
 			mission, completeErr := db.CompleteMission(ctx, args[2])
 			return output(mission, completeErr)
 		case "list":
-			fs := flag.NewFlagSet("mission list", flag.ContinueOnError)
+			fs := commandFlagSet("mission list")
 			status := fs.String("status", "", "")
 			limit := fs.Int("limit", 100, "")
 			if e = fs.Parse(args[2:]); e != nil {
@@ -223,7 +299,7 @@ func run(args []string) error {
 			if len(args) < 3 {
 				return errors.New("usage: chainproof mission claim MISSION_ID --holder HOLDER [--ttl 30m]")
 			}
-			fs := flag.NewFlagSet("mission claim", flag.ContinueOnError)
+			fs := commandFlagSet("mission claim")
 			holder := fs.String("holder", "", "")
 			ttl := fs.Duration("ttl", 30*time.Minute, "")
 			if e = fs.Parse(args[3:]); e != nil {
@@ -239,7 +315,7 @@ func run(args []string) error {
 			lease, claimErr := db.ClaimMission(ctx, args[2], continuity.LeaseInput{Holder: *holder, TTL: *ttl})
 			return output(lease, claimErr)
 		case "acquire":
-			fs := flag.NewFlagSet("mission acquire", flag.ContinueOnError)
+			fs := commandFlagSet("mission acquire")
 			holder := fs.String("holder", "", "")
 			ttl := fs.Duration("ttl", 30*time.Minute, "")
 			maxEvidence := fs.Int("max-evidence", 20, "")
@@ -259,7 +335,7 @@ func run(args []string) error {
 			if len(args) < 3 {
 				return errors.New("usage: chainproof mission lease MISSION_ID [--history]")
 			}
-			fs := flag.NewFlagSet("mission lease", flag.ContinueOnError)
+			fs := commandFlagSet("mission lease")
 			historyFlag := fs.Bool("history", false, "")
 			if e = fs.Parse(args[3:]); e != nil {
 				return e
@@ -281,7 +357,7 @@ func run(args []string) error {
 			if len(args) < 4 {
 				return errors.New("usage: chainproof mission renew MISSION_ID LEASE_ID [--ttl 30m]")
 			}
-			fs := flag.NewFlagSet("mission renew", flag.ContinueOnError)
+			fs := commandFlagSet("mission renew")
 			ttl := fs.Duration("ttl", 30*time.Minute, "")
 			if e = fs.Parse(args[4:]); e != nil {
 				return e
@@ -292,7 +368,7 @@ func run(args []string) error {
 			if len(args) < 4 {
 				return errors.New("usage: chainproof mission handoff MISSION_ID LEASE_ID --to HOLDER [--ttl 30m]")
 			}
-			fs := flag.NewFlagSet("mission handoff", flag.ContinueOnError)
+			fs := commandFlagSet("mission handoff")
 			holder := fs.String("to", "", "")
 			ttl := fs.Duration("ttl", 30*time.Minute, "")
 			if e = fs.Parse(args[4:]); e != nil {
@@ -310,7 +386,7 @@ func run(args []string) error {
 			return errors.New("usage: chainproof mission start|list|acquire|complete|export|claim|lease|renew|handoff|release")
 		}
 	case "start":
-		fs := flag.NewFlagSet("start", flag.ContinueOnError)
+		fs := commandFlagSet("start")
 		agent := fs.String("agent", "", "")
 		harness := fs.String("harness", "", "")
 		model := fs.String("model", "", "")
@@ -509,7 +585,7 @@ func run(args []string) error {
 		resume, resumeErr := db.ResumeMission(ctx, missionID)
 		return output(resume, resumeErr)
 	case "context":
-		fs := flag.NewFlagSet("context", flag.ContinueOnError)
+		fs := commandFlagSet("context")
 		missionID := fs.String("mission", "", "")
 		maxEvidence := fs.Int("max-evidence", 20, "")
 		if e = fs.Parse(args[1:]); e != nil {
@@ -629,7 +705,7 @@ func run(args []string) error {
 		if len(args) < 2 {
 			return errors.New("usage: chainproof run [--mission ID] -- COMMAND [ARGS...]")
 		}
-		fs := flag.NewFlagSet("run", flag.ContinueOnError)
+		fs := commandFlagSet("run")
 		missionID := fs.String("mission", "", "")
 		role := fs.String("role", strings.TrimSpace(os.Getenv("CHAINPROOF_AGENT_ROLE")), "")
 		if e = fs.Parse(args[1:]); e != nil {
@@ -649,6 +725,20 @@ func run(args []string) error {
 		})
 	default:
 		return fmt.Errorf("unknown command %q", args[0])
+	}
+}
+
+func knownCommand(name string) bool {
+	switch name {
+	case "version", "--version", "help", "--help", "-h",
+		"capabilities", "doctor", "verify-file", "verify-continuity-file",
+		"service", "agent", "whoami", "init", "mission", "start",
+		"append", "ingest", "pull", "complete", "verify", "export",
+		"list", "search", "checkpoint", "resume", "context", "recovery",
+		"codex", "run", "ui", "serve", "daemon":
+		return true
+	default:
+		return false
 	}
 }
 
@@ -686,7 +776,7 @@ func capabilityDocument(dbPath string) any {
 			"continuity":     "chainproof.continuity.bundle.v1",
 			"provenance":     "chainproof.bundle.v1",
 		},
-		Features: []string{"agent_identity", "artifact_store", "codex_collector", "codex_work", "continuity_proofs", "integration_pull", "integration_push", "local_api", "machine_readable_doctor", "machine_readable_init", "mission_leases", "mission_recovery", "missions", "process_wrap", "provenance_proofs", "search", "tui", "web_explorer"},
+		Features: []string{"agent_identity", "artifact_store", "codex_collector", "codex_work", "continuity_proofs", "integration_pull", "integration_push", "local_api", "machine_readable_doctor", "machine_readable_init", "mission_leases", "mission_recovery", "missions", "process_wrap", "provenance_proofs", "search", "stable_exit_codes", "structured_errors", "tui", "web_explorer"},
 	}
 }
 
@@ -714,7 +804,7 @@ func manageAgent(dbPath string, args []string) error {
 	}
 	switch args[0] {
 	case "ensure":
-		fs := flag.NewFlagSet("agent ensure", flag.ContinueOnError)
+		fs := commandFlagSet("agent ensure")
 		profileName := fs.String("profile", selectedAgentProfile(), "")
 		displayName := fs.String("name", "", "")
 		harness := fs.String("harness", "", "")
@@ -724,7 +814,7 @@ func manageAgent(dbPath string, args []string) error {
 		profile, err := identity.Ensure(agentRoot(dbPath), *profileName, *displayName, *harness)
 		return output(profile, err)
 	case "rename":
-		fs := flag.NewFlagSet("agent rename", flag.ContinueOnError)
+		fs := commandFlagSet("agent rename")
 		profileName := fs.String("profile", selectedAgentProfile(), "")
 		displayName := fs.String("name", "", "")
 		if err := fs.Parse(args[1:]); err != nil {
@@ -758,7 +848,7 @@ func missionRoleFor(profile identity.Profile, metadata map[string]any) string {
 }
 
 func runCodexWork(ctx context.Context, db *store.Store, dbPath string, args []string) error {
-	fs := flag.NewFlagSet("codex work", flag.ContinueOnError)
+	fs := commandFlagSet("codex work")
 	missionID := fs.String("mission", "", "")
 	acquire := fs.Bool("acquire", false, "")
 	execMode := fs.Bool("exec", false, "")
@@ -1140,6 +1230,7 @@ func configuredService() (service.Config, error) {
 const usage = `ChainProof — durable continuity and provenance for AI agents
 
 Usage:
+  chainproof [--json-errors] COMMAND         Emit versioned JSON on failure
   chainproof capabilities [--json]          Describe shipped machine capabilities
   chainproof init [--json]                   Initialize local state and identity
   chainproof doctor [--json]                 Diagnose local state without creating it
