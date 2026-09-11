@@ -1,6 +1,7 @@
 package service
 
 import (
+	"path/filepath"
 	"strings"
 	"testing"
 )
@@ -72,8 +73,10 @@ func TestRenderRejectsUnsupportedPlatform(t *testing.T) {
 }
 
 func TestLogPathUsesConfiguredDatabaseDirectory(t *testing.T) {
-	got := LogPath(Config{Database: "/srv/chainproof/state/ledger.db"}, "/home/me/.chainproof/daemon.log")
-	if got != "/srv/chainproof/state/daemon.log" {
+	database := filepath.Join("srv", "chainproof", "state", "ledger.db")
+	want := filepath.Join("srv", "chainproof", "state", "daemon.log")
+	got := LogPath(Config{Database: database}, filepath.Join("home", "me", ".chainproof", "daemon.log"))
+	if got != want {
 		t.Fatalf("LogPath() = %q", got)
 	}
 }
