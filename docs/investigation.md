@@ -57,6 +57,29 @@ The active content policy still applies. In the default Codex `hashes` mode,
 message bodies, commands, output, and change details are represented by their
 SHA-256 digest and byte count. The index sees the digest, not the omitted body.
 
+## Agent-readable CLI
+
+Agents can query same derived index without starting HTTP service:
+
+```sh
+chainproof search --status failed --tool shell
+chainproof search --run RUN_ID --kind tool.result "permission denied"
+chainproof inspect event EVENT_ID
+chainproof inspect run RUN_ID
+```
+
+Structured search accepts `--run`, `--agent`, `--kind`, `--tool`, `--status`,
+`--mode`, and `--limit`; filters combine with AND and free text is optional when
+at least one filter is present. Result schema `1` returns normalized query,
+bounded hits, total, and facets. Each hit carries canonical `event_id` for
+follow-up inspection.
+
+`inspect event` reads canonical event, including previous and stored event
+hashes. `inspect run` returns run, proof verification, parent, and children.
+Search summaries and lineage are navigation data; canonical event and proof
+verification remain authority. See
+[`spec/investigation-v1.md`](../spec/investigation-v1.md).
+
 ## Local API
 
 ```text

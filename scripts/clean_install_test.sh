@@ -114,6 +114,8 @@ grep -F '"product": "chainproof"' "$test_root/capabilities.json" >/dev/null
 grep -F '"mission_import"' "$test_root/capabilities.json" >/dev/null
 grep -F '"mission_workspaces"' "$test_root/capabilities.json" >/dev/null
 grep -F '"integration_guides"' "$test_root/capabilities.json" >/dev/null
+grep -F '"structured_search"' "$test_root/capabilities.json" >/dev/null
+grep -F '"canonical_inspection"' "$test_root/capabilities.json" >/dev/null
 "$binary" integration list >"$test_root/integrations.json"
 grep -F '"id": "codex"' "$test_root/integrations.json" >/dev/null
 grep -F '"id": "claude-code"' "$test_root/integrations.json" >/dev/null
@@ -148,6 +150,14 @@ if [ -z "$mission_id" ] || [ -z "$run_id" ]; then
 fi
 "$binary" append "$run_id" '{"kind":"clean.install.verified","payload":{"archive":true,"identity":true}}' >"$test_root/event.json"
 event_id=$(sed -n 's/.*"event_id": "\([^"]*\)".*/\1/p' "$test_root/event.json" | head -n 1)
+"$binary" search --run "$run_id" --kind clean.install.verified --mode reported --limit 1 >"$test_root/search.json"
+grep -F '"schema_version": "1"' "$test_root/search.json" >/dev/null
+grep -F "$event_id" "$test_root/search.json" >/dev/null
+"$binary" inspect event "$event_id" >"$test_root/inspect-event.json"
+grep -F '"event_hash":' "$test_root/inspect-event.json" >/dev/null
+grep -F "$event_id" "$test_root/inspect-event.json" >/dev/null
+"$binary" inspect run "$run_id" >"$test_root/inspect-run.json"
+grep -F '"valid": true' "$test_root/inspect-run.json" >/dev/null
 "$binary" checkpoint "$mission_id" "$run_id" "{\"summary\":\"Clean install lifecycle works\",\"next_actions\":[],\"blockers\":[],\"evidence\":[{\"event_id\":\"$event_id\",\"note\":\"installed binary wrote and verified evidence\"}]}" >"$test_root/checkpoint.json"
 "$binary" complete "$run_id" completed >"$test_root/completed-run.json"
 "$binary" mission complete "$mission_id" >"$test_root/completed-mission.json"

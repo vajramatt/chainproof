@@ -129,7 +129,7 @@ func TestSearchAndEventEvidenceEndpoints(t *testing.T) {
 	if err = json.NewDecoder(response.Body).Decode(&result); err != nil {
 		t.Fatal(err)
 	}
-	if result.Total != 1 || result.Hits[0].Status != "failed" {
+	if result.SchemaVersion != "1" || result.Total != 1 || result.Hits[0].Status != "failed" {
 		t.Fatalf("unexpected result: %+v", result)
 	}
 	request = httptest.NewRequest(http.MethodGet, "http://localhost/api/events/"+event.ID, nil)

@@ -26,6 +26,18 @@ func TestGuideCarriesCompleteAgentLifecycle(t *testing.T) {
 		if guide.SchemaVersion != "1" || guide.Format != Format || guide.ID != id || len(guide.Lifecycle) < 5 || len(guide.Provenance) == 0 || len(guide.Limitations) == 0 || guide.Source == "" {
 			t.Fatalf("incomplete %s guide: %+v", id, guide)
 		}
+		foundSearch, foundInspection := false, false
+		for _, step := range guide.Lifecycle {
+			if step.Phase == "search_evidence" && step.Command == "chainproof search --run RUN_ID QUERY" {
+				foundSearch = true
+			}
+			if step.Phase == "inspect_evidence" && step.Command == "chainproof inspect event EVENT_ID" {
+				foundInspection = true
+			}
+		}
+		if !foundSearch || !foundInspection {
+			t.Fatalf("%s guide lacks canonical investigation step: %+v", id, guide.Lifecycle)
+		}
 	}
 	alias, err := Show("claude")
 	if err != nil || alias.ID != "claude-code" {

@@ -682,12 +682,42 @@ func run(args []string) error {
 		v, e := db.Runs(ctx, 100)
 		return output(v, e)
 	case "search":
-		query := strings.TrimSpace(strings.Join(args[1:], " "))
-		if query == "" {
-			return errors.New("usage: chainproof search QUERY")
+		query, queryErr := parseSearchQuery(args[1:])
+		if queryErr != nil {
+			return queryErr
 		}
-		v, e := db.Search(ctx, store.SearchQuery{Text: query, Limit: 100})
+		v, e := db.Search(ctx, query)
 		return output(v, e)
+	case "inspect":
+		if len(args) != 3 {
+			return errors.New("usage: chainproof inspect event EVENT_ID | inspect run RUN_ID")
+		}
+		switch args[1] {
+		case "event":
+			return output(db.Event(ctx, args[2]))
+		case "run":
+			lineage, lineageErr := db.Lineage(ctx, args[2])
+			if lineageErr != nil {
+				return lineageErr
+			}
+			verification := db.Verify(ctx, args[2])
+			result := struct {
+				SchemaVersion string             `json:"schema_version"`
+				Run           proof.Run          `json:"run"`
+				Verification  proof.Verification `json:"verification"`
+				Parent        *proof.Run         `json:"parent,omitempty"`
+				Children      []proof.Run        `json:"children"`
+			}{"1", lineage.Run, verification, lineage.Parent, lineage.Children}
+			if outputErr := output(result, nil); outputErr != nil {
+				return outputErr
+			}
+			if !verification.Valid {
+				return errors.New("verification failed")
+			}
+			return nil
+		default:
+			return errors.New("usage: chainproof inspect event EVENT_ID | inspect run RUN_ID")
+		}
 	case "checkpoint":
 		if len(args) < 3 {
 			return errors.New("usage: chainproof checkpoint MISSION_ID RUN_ID [JSON] | checkpoint --current [JSON]")
@@ -900,7 +930,7 @@ func knownCommand(name string) bool {
 		"capabilities", "integration", "doctor", "verify-file", "verify-continuity-file",
 		"service", "agent", "whoami", "init", "backup", "restore", "mission", "start",
 		"append", "ingest", "pull", "complete", "verify", "export",
-		"list", "search", "checkpoint", "resume", "context", "recovery",
+		"list", "search", "inspect", "checkpoint", "resume", "context", "recovery",
 		"codex", "run", "ui", "serve", "daemon":
 		return true
 	default:
@@ -940,12 +970,47 @@ func capabilityDocument(dbPath string) any {
 			"agent_identity":    "chainproof.agent.v1",
 			"agent_work":        "chainproof.agent-work.v1",
 			"continuity":        "chainproof.continuity.bundle.v1",
+			"investigation":     "chainproof.investigation.v1",
 			"integration_guide": integrationguide.Format,
 			"mission_workspace": missionworkspace.Format,
 			"provenance":        "chainproof.bundle.v1",
 		},
-		Features: []string{"agent_identity", "artifact_store", "codex_collector", "codex_work", "continuity_proofs", "independent_process_coordination", "instance_backup_restore", "integration_guides", "integration_pull", "integration_push", "local_api", "machine_readable_doctor", "machine_readable_init", "mission_import", "mission_leases", "mission_recovery", "mission_workspaces", "missions", "process_wrap", "provenance_proofs", "search", "stable_exit_codes", "structured_errors", "tui", "web_explorer"},
+		Features: []string{"agent_identity", "artifact_store", "canonical_inspection", "codex_collector", "codex_work", "continuity_proofs", "independent_process_coordination", "instance_backup_restore", "integration_guides", "integration_pull", "integration_push", "local_api", "machine_readable_doctor", "machine_readable_init", "mission_import", "mission_leases", "mission_recovery", "mission_workspaces", "missions", "process_wrap", "provenance_proofs", "search", "stable_exit_codes", "structured_errors", "structured_search", "tui", "web_explorer"},
 	}
+}
+
+func parseSearchQuery(args []string) (store.SearchQuery, error) {
+	fs := commandFlagSet("search")
+	runID := fs.String("run", "", "")
+	agent := fs.String("agent", "", "")
+	kind := fs.String("kind", "", "")
+	tool := fs.String("tool", "", "")
+	status := fs.String("status", "", "")
+	mode := fs.String("mode", "", "")
+	limit := fs.Int("limit", 100, "")
+	if err := fs.Parse(args); err != nil {
+		return store.SearchQuery{}, err
+	}
+	query := store.SearchQuery{
+		Text:   strings.TrimSpace(strings.Join(fs.Args(), " ")),
+		RunID:  strings.TrimSpace(*runID),
+		Agent:  strings.TrimSpace(*agent),
+		Kind:   strings.TrimSpace(*kind),
+		Tool:   strings.TrimSpace(*tool),
+		Status: strings.TrimSpace(*status),
+		Mode:   strings.TrimSpace(*mode),
+		Limit:  *limit,
+	}
+	if query.Text == "" && query.RunID == "" && query.Agent == "" && query.Kind == "" && query.Tool == "" && query.Status == "" && query.Mode == "" {
+		return store.SearchQuery{}, errors.New("usage: chainproof search [--run ID] [--agent NAME] [--kind KIND] [--tool TOOL] [--status STATUS] [--mode MODE] [--limit N] [QUERY]")
+	}
+	if query.Limit < 1 || query.Limit > 500 {
+		return store.SearchQuery{}, errors.New("search --limit must be between 1 and 500")
+	}
+	if query.Mode != "" && query.Mode != "observed" && query.Mode != "reported" && query.Mode != "imported" && query.Mode != "derived" {
+		return store.SearchQuery{}, errors.New("search --mode must be observed, reported, imported, or derived")
+	}
+	return query, nil
 }
 
 type wrappedCommand struct {
@@ -1451,7 +1516,9 @@ Usage:
   chainproof verify-continuity-file PROOF.json
                                               Verify mission proof offline
   chainproof list
-  chainproof search QUERY                    Search local provenance evidence
+  chainproof search [FILTERS] [QUERY]        Search indexed provenance evidence
+  chainproof inspect event EVENT_ID          Read one canonical event
+  chainproof inspect run RUN_ID              Read run, proof status, and lineage
   chainproof checkpoint MISSION_ID RUN_ID [JSON]
                                               Anchor resumable state to run proof
   chainproof checkpoint --current [JSON]      Checkpoint wrapped agent run

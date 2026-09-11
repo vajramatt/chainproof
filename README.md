@@ -65,6 +65,8 @@ Current `main` contains the agent-first continuity loop:
   referenced content-addressed artifacts
 - side-effect-free, machine-readable lifecycle guides for Codex, Claude Code,
   OpenClaw, and generic local harnesses
+- filter-only structured search plus canonical event and proof-aware run
+  inspection for agent-driven investigations without HTTP
 - mission, checkpoint, lease, context, and recovery access through the CLI, localhost API,
   TUI, and embedded read-only web explorer where appropriate
 - side-effect-free `capabilities --json` and `doctor --json` discovery plus
@@ -580,17 +582,25 @@ the shell:
 chainproof search "failed"
 chainproof search "internal/store/search.go"
 chainproof search "e4be0f5dbd629073"
+chainproof search --run RUN_ID --status failed --tool shell
+chainproof inspect event EVENT_ID
+chainproof inspect run RUN_ID
 ```
 
-The web interface combines free-text search with facets for agent, event kind,
-tool, status, and collection mode. Selecting a result reveals its canonical
-payload, native source identity, previous hash, and event hash. You can search
-tool names, paths, working directories, outcomes, and hashes even when message
-content is protected by the default hashes-only policy.
+CLI and web interface combine free-text search with filters for run, agent,
+event kind, tool, status, and collection mode. CLI search accepts filters
+without free text and emits schema-versioned query, hits, total, and facets.
+`inspect event` loads selected canonical payload and proof fields; `inspect run`
+loads run, proof status, and lineage. You can search tool names, paths, working
+directories, outcomes, and hashes even when message content is protected by
+default hashes-only policy.
 
-The index is deliberately not part of the proof. It can be deleted and rebuilt
-from canonical ledger events without changing a chain head. See
-[`docs/investigation.md`](docs/investigation.md) for the boundary and query API.
+The index is deliberately not part of proof. It can be deleted and rebuilt
+from canonical ledger events without changing a chain head. Agents should use
+search hits for navigation, then inspect canonical event before citing it. See
+[`docs/investigation.md`](docs/investigation.md) and
+[`spec/investigation-v1.md`](spec/investigation-v1.md) for boundary and query
+contract.
 
 The next-generation local browser experience is specified in
 [`docs/web-explorer.md`](docs/web-explorer.md): a run cockpit for timelines,
@@ -812,7 +822,9 @@ It does not edit the repositories or harness histories it observes.
 | `chainproof recovery reject` | reject a tail while preserving prior trusted state |
 | `chainproof verify-continuity-file` | verify portable mission proof offline |
 | `chainproof list` | print local runs as JSON |
-| `chainproof search QUERY` | search structured local provenance evidence |
+| `chainproof search [FILTERS] [QUERY]` | search derived local provenance index with schema-versioned filters and facets |
+| `chainproof inspect event EVENT_ID` | load one canonical event and proof fields |
+| `chainproof inspect run RUN_ID` | load run, proof verification, and lineage |
 | `chainproof codex sync` | discover and import Codex sessions once |
 | `chainproof codex watch` | continuously follow Codex sessions |
 | `chainproof codex work` | run or atomically acquire Codex work with verified mission context |

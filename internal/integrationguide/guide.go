@@ -77,6 +77,8 @@ func catalog() map[string]Guide {
 	verifyTransfer := Step{Phase: "verify_transfer", Command: "chainproof mission workspace verify DIRECTORY", Purpose: "verify package offline before trusting or importing it"}
 	importTransfer := Step{Phase: "import_transfer", Command: "chainproof mission workspace import DIRECTORY", Purpose: "atomically rebuild mission and referenced artifacts in destination instance"}
 	resume := Step{Phase: "resume", Command: "chainproof resume MISSION_ID", Purpose: "load latest verified checkpoint after transfer or later session"}
+	searchEvidence := Step{Phase: "search_evidence", Command: "chainproof search --run RUN_ID QUERY", Purpose: "query derived index for relevant evidence inside one run"}
+	inspectEvidence := Step{Phase: "inspect_evidence", Command: "chainproof inspect event EVENT_ID", Purpose: "load canonical event and proof fields selected from search results"}
 	return map[string]Guide{
 		"codex": {
 			SchemaVersion: "1", Format: Format, ID: "codex", Name: "Codex", Mode: "native", Status: "built_in",
@@ -84,7 +86,7 @@ func catalog() map[string]Guide {
 			Lifecycle: append(append([]Step{}, bootstrap...),
 				Step{Phase: "acquire_and_work", Command: "chainproof codex work --acquire --exec", Purpose: "atomically claim oldest available mission and launch Codex with verified context"},
 				Step{Phase: "work_specific", Command: "chainproof codex work --mission MISSION_ID --exec", Purpose: "launch Codex for known mission with automatic lease renewal"},
-				Step{Phase: "checkpoint", Command: "chainproof checkpoint --current CHECKPOINT_JSON", Purpose: "anchor resumable state before agent exits"}, transfer, verifyTransfer, importTransfer, resume),
+				searchEvidence, inspectEvidence, Step{Phase: "checkpoint", Command: "chainproof checkpoint --current CHECKPOINT_JSON", Purpose: "anchor resumable state before agent exits"}, transfer, verifyTransfer, importTransfer, resume),
 			Environment: []string{"CHAINPROOF_CONTEXT_FILE", "CHAINPROOF_MISSION_ID", "CHAINPROOF_RUN_ID", "CHAINPROOF_AGENT_ID", "CHAINPROOF_WORKER_ID", "CHAINPROOF_LEASE_ID"},
 			Provenance:  []string{"wrapper process lifecycle is observed", "native Codex session detail is imported and linked only after parent mission validation"},
 			Limitations: []string{"reasoning records are not imported", "identity attribution is hash-bound but unsigned", "coordination assumes one local OS-user trust boundary"},
@@ -95,7 +97,7 @@ func catalog() map[string]Guide {
 			Lifecycle: append(append([]Step{}, bootstrap...),
 				Step{Phase: "work", Command: "chainproof run --mission MISSION_ID -- claude", Purpose: "launch Claude Code with verified context environment and observed process lifecycle"},
 				Step{Phase: "read_context", Command: "chainproof context", Purpose: "load verified mission checkpoint before changing work"},
-				Step{Phase: "checkpoint", Command: "chainproof checkpoint --current CHECKPOINT_JSON", Purpose: "anchor resumable state before agent exits"}, transfer, verifyTransfer, importTransfer, resume),
+				searchEvidence, inspectEvidence, Step{Phase: "checkpoint", Command: "chainproof checkpoint --current CHECKPOINT_JSON", Purpose: "anchor resumable state before agent exits"}, transfer, verifyTransfer, importTransfer, resume),
 			Environment: []string{"CHAINPROOF_CONTEXT_FILE", "CHAINPROOF_MISSION_ID", "CHAINPROOF_RUN_ID", "CHAINPROOF_AGENT_ID", "CHAINPROOF_WORKER_ID"},
 			Provenance:  []string{"wrapper lifecycle is observed", "hook-pushed events must be reported", "pulled history is imported"},
 			Limitations: []string{"generic wrapper does not inject context into prompt", "rich tool events require push hook or pull adapter", "lease lifecycle is not automatic"},
@@ -106,7 +108,7 @@ func catalog() map[string]Guide {
 			Lifecycle: append(append([]Step{}, bootstrap...),
 				Step{Phase: "serve", Command: "chainproof serve", Purpose: "start loopback-only ingestion API"},
 				Step{Phase: "install_hook", Command: "install integrations/openclaw as an OpenClaw hook", Purpose: "report message and tool events to local ChainProof"},
-				Step{Phase: "checkpoint", Command: "chainproof checkpoint MISSION_ID RUN_ID CHECKPOINT_JSON", Purpose: "anchor reviewed OpenClaw work to mission"}, transfer, verifyTransfer, importTransfer, resume),
+				searchEvidence, inspectEvidence, Step{Phase: "checkpoint", Command: "chainproof checkpoint MISSION_ID RUN_ID CHECKPOINT_JSON", Purpose: "anchor reviewed OpenClaw work to mission"}, transfer, verifyTransfer, importTransfer, resume),
 			Environment: []string{"CHAINPROOF_URL", "CHAINPROOF_STORE_CONTENT"},
 			Provenance:  []string{"hook-submitted events are reported", "optional artifact bodies remain local and content-addressed"},
 			Limitations: []string{"hook does not automatically acquire mission leases", "HTTP endpoint remains loopback-only", "reported events do not prove model truth"},
@@ -117,7 +119,7 @@ func catalog() map[string]Guide {
 			Lifecycle: append(append([]Step{}, bootstrap...),
 				Step{Phase: "work", Command: "chainproof run --mission MISSION_ID -- COMMAND [ARGS...]", Purpose: "launch any local harness with verified context environment"},
 				Step{Phase: "read_context", Command: "chainproof context", Purpose: "load verified mission state before work"},
-				Step{Phase: "checkpoint", Command: "chainproof checkpoint --current CHECKPOINT_JSON", Purpose: "anchor resumable state before process exits"}, transfer, verifyTransfer, importTransfer, resume),
+				searchEvidence, inspectEvidence, Step{Phase: "checkpoint", Command: "chainproof checkpoint --current CHECKPOINT_JSON", Purpose: "anchor resumable state before process exits"}, transfer, verifyTransfer, importTransfer, resume),
 			Environment: []string{"CHAINPROOF_CONTEXT_FILE", "CHAINPROOF_MISSION_ID", "CHAINPROOF_RUN_ID", "CHAINPROOF_AGENT_ID", "CHAINPROOF_WORKER_ID"},
 			Provenance:  []string{"process lifecycle is observed", "CLI or HTTP submissions are reported", "pull-adapter histories are imported"},
 			Limitations: []string{"context is data and is not automatically injected into model prompt", "rich events require harness integration", "lease lifecycle is caller-managed"},

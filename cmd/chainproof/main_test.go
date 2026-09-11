@@ -190,10 +190,10 @@ func TestCapabilitiesJSONDescribesCurrentBuild(t *testing.T) {
 	if capabilities.Network["default_url"] != "http://127.0.0.1:7331" || capabilities.Network["listen_scope"] != "loopback" || capabilities.Network["authentication"] != "none" {
 		t.Fatalf("unexpected capability network boundary: %s", capabilitiesJSON)
 	}
-	if capabilities.Protocols["provenance"] != "chainproof.bundle.v1" || capabilities.Protocols["continuity"] != "chainproof.continuity.bundle.v1" || capabilities.Protocols["agent_work"] != "chainproof.agent-work.v1" || capabilities.Protocols["agent_identity"] != "chainproof.agent.v1" || capabilities.Protocols["mission_workspace"] != missionworkspace.Format || capabilities.Protocols["integration_guide"] != integrationguide.Format {
+	if capabilities.Protocols["provenance"] != "chainproof.bundle.v1" || capabilities.Protocols["continuity"] != "chainproof.continuity.bundle.v1" || capabilities.Protocols["agent_work"] != "chainproof.agent-work.v1" || capabilities.Protocols["agent_identity"] != "chainproof.agent.v1" || capabilities.Protocols["mission_workspace"] != missionworkspace.Format || capabilities.Protocols["integration_guide"] != integrationguide.Format || capabilities.Protocols["investigation"] != "chainproof.investigation.v1" {
 		t.Fatalf("unexpected capability protocols: %s", capabilitiesJSON)
 	}
-	wantFeatures := []string{"agent_identity", "artifact_store", "codex_collector", "codex_work", "continuity_proofs", "independent_process_coordination", "instance_backup_restore", "integration_guides", "integration_pull", "integration_push", "local_api", "machine_readable_doctor", "machine_readable_init", "mission_import", "mission_leases", "mission_recovery", "mission_workspaces", "missions", "process_wrap", "provenance_proofs", "search", "stable_exit_codes", "structured_errors", "tui", "web_explorer"}
+	wantFeatures := []string{"agent_identity", "artifact_store", "canonical_inspection", "codex_collector", "codex_work", "continuity_proofs", "independent_process_coordination", "instance_backup_restore", "integration_guides", "integration_pull", "integration_push", "local_api", "machine_readable_doctor", "machine_readable_init", "mission_import", "mission_leases", "mission_recovery", "mission_workspaces", "missions", "process_wrap", "provenance_proofs", "search", "stable_exit_codes", "structured_errors", "structured_search", "tui", "web_explorer"}
 	if !reflect.DeepEqual(capabilities.Features, wantFeatures) {
 		t.Fatalf("features = %v, want %v", capabilities.Features, wantFeatures)
 	}
@@ -224,6 +224,124 @@ func TestIntegrationGuidesAreSideEffectFreeAndMachineReadable(t *testing.T) {
 	}
 	if _, err := os.Lstat(dbPath); !errors.Is(err, os.ErrNotExist) {
 		t.Fatalf("integration discovery created state: %v", err)
+	}
+}
+
+func TestSearchCommandSupportsStructuredFiltersWithoutFreeText(t *testing.T) {
+	dbPath := filepath.Join(t.TempDir(), "chainproof.db")
+	t.Setenv("CHAINPROOF_DB", dbPath)
+	db, err := store.Open(dbPath)
+	if err != nil {
+		t.Fatal(err)
+	}
+	runRecord, err := db.Start(context.Background(), "builder", "codex", "gpt-test", nil)
+	if err != nil {
+		t.Fatal(err)
+	}
+	wanted, err := db.Append(context.Background(), runRecord.ID, proof.EventInput{
+		Kind:    "tool.result",
+		Source:  proof.Source{Adapter: "test", Mode: "observed"},
+		Payload: map[string]any{"tool": "shell", "status": "failed", "path": "internal/store/search.go"},
+	})
+	if err != nil {
+		t.Fatal(err)
+	}
+	if _, err = db.Append(context.Background(), runRecord.ID, proof.EventInput{
+		Kind:    "tool.result",
+		Source:  proof.Source{Adapter: "test", Mode: "reported"},
+		Payload: map[string]any{"tool": "shell", "status": "completed", "path": "README.md"},
+	}); err != nil {
+		t.Fatal(err)
+	}
+	if err = db.Close(); err != nil {
+		t.Fatal(err)
+	}
+
+	raw := captureStdout(t, func() error {
+		return run([]string{"search", "--run", runRecord.ID, "--agent", "builder", "--kind", "tool.result", "--tool", "shell", "--status", "failed", "--mode", "observed", "--limit", "1"})
+	})
+	var result store.SearchResult
+	if err = json.Unmarshal([]byte(raw), &result); err != nil {
+		t.Fatal(err)
+	}
+	if result.SchemaVersion != "1" || result.Total != 1 || len(result.Hits) != 1 || result.Hits[0].EventID != wanted.ID {
+		t.Fatalf("structured search = %s", raw)
+	}
+	if result.Query.Text != "" || result.Query.RunID != runRecord.ID || result.Query.Agent != "builder" || result.Query.Kind != "tool.result" || result.Query.Tool != "shell" || result.Query.Status != "failed" || result.Query.Mode != "observed" || result.Query.Limit != 1 {
+		t.Fatalf("search query not preserved: %+v", result.Query)
+	}
+
+	raw = captureStdout(t, func() error { return run([]string{"search", "search.go"}) })
+	if err = json.Unmarshal([]byte(raw), &result); err != nil {
+		t.Fatal(err)
+	}
+	if result.Total != 1 || result.Hits[0].EventID != wanted.ID {
+		t.Fatalf("legacy free-text search = %s", raw)
+	}
+}
+
+func TestSearchCommandRejectsInvalidAutomationInputs(t *testing.T) {
+	for _, args := range [][]string{
+		{},
+		{"--limit", "0", "failure"},
+		{"--limit", "501", "failure"},
+		{"--mode", "trusted"},
+	} {
+		if _, err := parseSearchQuery(args); err == nil {
+			t.Fatalf("parseSearchQuery(%v) succeeded", args)
+		}
+	}
+}
+
+func TestInspectCommandReturnsCanonicalEventAndVerifiedRunLineage(t *testing.T) {
+	dbPath := filepath.Join(t.TempDir(), "chainproof.db")
+	t.Setenv("CHAINPROOF_DB", dbPath)
+	db, err := store.Open(dbPath)
+	if err != nil {
+		t.Fatal(err)
+	}
+	parent, err := db.Start(context.Background(), "planner", "codex", "gpt-test", nil)
+	if err != nil {
+		t.Fatal(err)
+	}
+	event, err := db.Append(context.Background(), parent.ID, proof.EventInput{
+		Kind:    "decision.recorded",
+		Source:  proof.Source{Adapter: "test", Mode: "reported"},
+		Payload: map[string]any{"choice": "SQLite remains canonical"},
+	})
+	if err != nil {
+		t.Fatal(err)
+	}
+	child, err := db.Start(context.Background(), "worker", "codex", "gpt-test", map[string]any{"parent_run_id": parent.ID})
+	if err != nil {
+		t.Fatal(err)
+	}
+	if err = db.Close(); err != nil {
+		t.Fatal(err)
+	}
+
+	raw := captureStdout(t, func() error { return run([]string{"inspect", "event", event.ID}) })
+	var inspectedEvent proof.Event
+	if err = json.Unmarshal([]byte(raw), &inspectedEvent); err != nil {
+		t.Fatal(err)
+	}
+	if inspectedEvent.ID != event.ID || inspectedEvent.EventHash == "" || inspectedEvent.PreviousHash == "" {
+		t.Fatalf("event inspection = %s", raw)
+	}
+
+	raw = captureStdout(t, func() error { return run([]string{"inspect", "run", parent.ID}) })
+	var inspectedRun struct {
+		SchemaVersion string             `json:"schema_version"`
+		Run           proof.Run          `json:"run"`
+		Verification  proof.Verification `json:"verification"`
+		Parent        *proof.Run         `json:"parent,omitempty"`
+		Children      []proof.Run        `json:"children"`
+	}
+	if err = json.Unmarshal([]byte(raw), &inspectedRun); err != nil {
+		t.Fatal(err)
+	}
+	if inspectedRun.SchemaVersion != "1" || inspectedRun.Run.ID != parent.ID || !inspectedRun.Verification.Valid || inspectedRun.Parent != nil || len(inspectedRun.Children) != 1 || inspectedRun.Children[0].ID != child.ID {
+		t.Fatalf("run inspection = %s", raw)
 	}
 }
 

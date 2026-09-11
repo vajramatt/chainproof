@@ -44,10 +44,11 @@ type Facet struct {
 }
 
 type SearchResult struct {
-	Query  SearchQuery        `json:"query"`
-	Hits   []SearchHit        `json:"hits"`
-	Total  int                `json:"total"`
-	Facets map[string][]Facet `json:"facets"`
+	SchemaVersion string             `json:"schema_version"`
+	Query         SearchQuery        `json:"query"`
+	Hits          []SearchHit        `json:"hits"`
+	Total         int                `json:"total"`
+	Facets        map[string][]Facet `json:"facets"`
 }
 
 type Lineage struct {
@@ -201,7 +202,7 @@ func (s *Store) Search(ctx context.Context, q SearchQuery) (SearchResult, error)
 		return SearchResult{}, err
 	}
 	defer rows.Close()
-	result := SearchResult{Query: q, Total: total, Hits: []SearchHit{}, Facets: map[string][]Facet{}}
+	result := SearchResult{SchemaVersion: "1", Query: q, Total: total, Hits: []SearchHit{}, Facets: map[string][]Facet{}}
 	for rows.Next() {
 		var h SearchHit
 		var ts string

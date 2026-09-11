@@ -58,6 +58,8 @@ formats, and release artifacts.
   was true.
 - Preserve provenance modes (`observed`, `reported`, `imported`, `derived`) and
   never present derived evidence as directly observed.
+- Keep search explicitly derived and rebuildable. Agents may navigate by search
+  hit, but must inspect canonical event before citing payload or proof fields.
 - Allow local HTTP services to bind only to loopback and avoid third-party
   browser assets, telemetry, or network requests.
 - Keep the shipped product dependency-light and compatible with a single-binary
@@ -82,6 +84,8 @@ formats, and release artifacts.
   available. This is side-effect-free.
 - Run `chainproof integration show codex|claude-code|openclaw|generic` to load
   exact lifecycle and provenance guidance for current harness.
+- Use structured `chainproof search` to find evidence, then `chainproof inspect
+  event EVENT_ID` to load canonical record before citing it.
 - When `CHAINPROOF_MISSION_ID` is present, read verified context before acting
   and write `chainproof checkpoint --current CHECKPOINT.json` before ending
   useful work.

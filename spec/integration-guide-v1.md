@@ -20,9 +20,13 @@ MUST operate without opening or creating ledger, identity, lease, or network
 state.
 
 Command templates use uppercase placeholders such as `MISSION_ID`, `RUN_ID`,
-`CHECKPOINT_JSON`, `DIRECTORY`, and `COMMAND`. Consumers replace placeholders;
-they MUST NOT send templates directly to shell without argument-safe
-substitution.
+`EVENT_ID`, `QUERY`, `CHECKPOINT_JSON`, `DIRECTORY`, and `COMMAND`. Consumers
+replace placeholders; they MUST NOT send templates directly to shell without
+argument-safe substitution.
+
+Every bundled lifecycle includes derived evidence search followed by canonical
+event inspection. A search hit is not proof evidence until consumer loads its
+canonical event and retains provenance and hash fields.
 
 Guide status describes shipped integration surface:
 

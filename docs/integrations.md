@@ -15,7 +15,8 @@ chainproof integration show generic
 
 These commands emit `chainproof.integration-guide.v1` JSON and create no
 ledger, identity, or other local state. Each bundled profile supplies ordered
-bootstrap, work, checkpoint, transfer, and resume commands; relevant
+bootstrap, work, evidence search and canonical inspection, checkpoint,
+transfer, and resume commands; relevant
 `CHAINPROOF_*` environment; provenance boundary; current limitations; and
 canonical first-party guide URL. Capability discovery advertises both
 `integration_guides` and protocol format.
