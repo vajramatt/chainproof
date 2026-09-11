@@ -60,6 +60,8 @@ Current `main` contains the agent-first continuity loop:
 - portable continuity proofs covering checkpoint history and every anchored run prefix
 - mission, checkpoint, lease, context, and recovery access through the CLI, localhost API,
   TUI, and embedded read-only web explorer where appropriate
+- side-effect-free `capabilities --json` and `doctor --json` discovery plus
+  idempotent `init --json` state and identity bootstrap on current `main`
 
 Current release line is `v0.6.0`. Source builds from `main` include these
 capabilities too.
@@ -99,11 +101,12 @@ ChainProof can support controlled local pilots today. One machine can run
 cooperative agents against one ledger through the CLI, TUI, embedded web
 explorer, and loopback API. Broader unattended use needs these release gates:
 
-1. **Machine-readable bootstrap.** Add idempotent `chainproof init --json`,
-   `chainproof capabilities --json`, and `chainproof doctor --json` commands,
-   stable exit codes, and structured errors. An agent must be able to discover
-   installed features, create or load identity, inspect available work, and
-   diagnose its environment without parsing prose.
+1. **Machine-readable bootstrap.** Current `main` includes side-effect-free
+   `chainproof capabilities --json` and `chainproof doctor --json` plus
+   idempotent `chainproof init --json`. Stable exit codes and structured errors
+   remain before release. An agent must be able to discover installed features,
+   create or load identity, inspect available work, and diagnose its environment
+   without parsing prose.
 2. **Process and failure hardening.** Test independent OS processes sharing one
    database, WAL recovery after forced termination, interrupted checkpoints,
    expired leases, corrupted profiles, lost keys, database upgrades, and
@@ -155,6 +158,17 @@ cd chainproof
 make build
 ./chainproof
 ```
+
+Agents using current `main` can bootstrap without parsing human output:
+
+```sh
+chainproof capabilities --json
+chainproof init --json
+chainproof doctor --json
+```
+
+See [`docs/agent-bootstrap.md`](docs/agent-bootstrap.md) for field and
+side-effect contracts. These commands are newer than release `v0.6.0`.
 
 The installer verifies the release archive against its published SHA-256
 checksum. The database opens at `~/.chainproof/chainproof.db`; set
@@ -645,6 +659,9 @@ It does not edit the repositories or harness histories it observes.
 
 | command | what |
 | --- | --- |
+| `chainproof capabilities --json` | describe current build, paths, protocols, and shipped features without creating state |
+| `chainproof init --json` | idempotently initialize ledger and stable local identity |
+| `chainproof doctor --json` | diagnose platform, ledger, permissions, identity, and loopback API without creating state |
 | `chainproof agent ensure` | create or load stable local agent identity |
 | `chainproof agent rename` | change readable name without rotating stable ID |
 | `chainproof whoami` | print current public agent identity |

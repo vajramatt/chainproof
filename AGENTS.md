@@ -33,6 +33,9 @@ formats, and release artifacts.
 - Keep Agent Work Protocol environment variables harness-neutral. Context files
   must be private, ephemeral, verified before child start, and treated as data
   rather than generic prompt text.
+- Keep machine-readable bootstrap idempotent and side-effect boundaries exact:
+  capability discovery and diagnostics must not initialize state, while
+  initialization must converge on same stable local identity.
 - Keep local agent profiles owner-only and separate stable `agent_id`, readable
   `display_name`, ephemeral `worker_id`, and mission-specific `role`. Never
   describe unsigned attribution metadata as authentication or signed proof.

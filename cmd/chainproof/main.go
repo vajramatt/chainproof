@@ -13,6 +13,7 @@ import (
 	"os/exec"
 	"os/signal"
 	"path/filepath"
+	"runtime"
 	"strconv"
 	"strings"
 	"syscall"
@@ -47,6 +48,24 @@ func run(args []string) error {
 	if args[0] == "help" || args[0] == "--help" || args[0] == "-h" {
 		fmt.Print(usage)
 		return nil
+	}
+	if args[0] == "capabilities" {
+		fs := flag.NewFlagSet("capabilities", flag.ContinueOnError)
+		_ = fs.Bool("json", false, "")
+		if err := fs.Parse(args[1:]); err != nil {
+			return err
+		}
+		if fs.NArg() != 0 {
+			return errors.New("usage: chainproof capabilities [--json]")
+		}
+		dbPath, err := configuredDBPath()
+		if err != nil {
+			return err
+		}
+		return output(capabilityDocument(dbPath), nil)
+	}
+	if args[0] == "doctor" {
+		return runDoctor(args[1:])
 	}
 	if args[0] == "verify-file" {
 		if len(args) < 2 {
@@ -89,13 +108,9 @@ func run(args []string) error {
 	if args[0] == "service" {
 		return manageService(args[1:])
 	}
-	dbPath := os.Getenv("CHAINPROOF_DB")
-	if dbPath == "" {
-		home, e := os.UserHomeDir()
-		if e != nil {
-			return e
-		}
-		dbPath = filepath.Join(home, ".chainproof", "chainproof.db")
+	dbPath, e := configuredDBPath()
+	if e != nil {
+		return e
 	}
 	if e := os.MkdirAll(filepath.Dir(dbPath), 0700); e != nil {
 		return e
@@ -120,6 +135,26 @@ func run(args []string) error {
 	ctx := context.Background()
 	switch args[0] {
 	case "init":
+		fs := flag.NewFlagSet("init", flag.ContinueOnError)
+		jsonOutput := fs.Bool("json", false, "")
+		if e = fs.Parse(args[1:]); e != nil {
+			return e
+		}
+		if fs.NArg() != 0 {
+			return errors.New("usage: chainproof init [--json]")
+		}
+		profile, profileErr := ensureCurrentAgent(dbPath, "")
+		if profileErr != nil {
+			return profileErr
+		}
+		if *jsonOutput {
+			return output(struct {
+				SchemaVersion string           `json:"schema_version"`
+				Status        string           `json:"status"`
+				Ledger        string           `json:"ledger"`
+				Agent         identity.Profile `json:"agent"`
+			}{SchemaVersion: "1", Status: "ready", Ledger: dbPath, Agent: profile}, nil)
+		}
 		fmt.Println("initialized", dbPath)
 		return nil
 	case "mission":
@@ -617,6 +652,44 @@ func run(args []string) error {
 	}
 }
 
+func configuredDBPath() (string, error) {
+	if dbPath := strings.TrimSpace(os.Getenv("CHAINPROOF_DB")); dbPath != "" {
+		return dbPath, nil
+	}
+	home, err := os.UserHomeDir()
+	if err != nil {
+		return "", err
+	}
+	return filepath.Join(home, ".chainproof", "chainproof.db"), nil
+}
+
+func capabilityDocument(dbPath string) any {
+	return struct {
+		SchemaVersion string            `json:"schema_version"`
+		Product       string            `json:"product"`
+		Version       string            `json:"version"`
+		Platform      map[string]string `json:"platform"`
+		Paths         map[string]string `json:"paths"`
+		Network       map[string]string `json:"network"`
+		Protocols     map[string]string `json:"protocols"`
+		Features      []string          `json:"features"`
+	}{
+		SchemaVersion: "1",
+		Product:       "chainproof",
+		Version:       version,
+		Platform:      map[string]string{"arch": runtime.GOARCH, "os": runtime.GOOS},
+		Paths:         map[string]string{"agent_home": agentRoot(dbPath), "ledger": dbPath},
+		Network:       map[string]string{"authentication": "none", "default_url": "http://127.0.0.1:7331", "listen_scope": "loopback"},
+		Protocols: map[string]string{
+			"agent_identity": "chainproof.agent.v1",
+			"agent_work":     "chainproof.agent-work.v1",
+			"continuity":     "chainproof.continuity.bundle.v1",
+			"provenance":     "chainproof.bundle.v1",
+		},
+		Features: []string{"agent_identity", "artifact_store", "codex_collector", "codex_work", "continuity_proofs", "integration_pull", "integration_push", "local_api", "machine_readable_doctor", "machine_readable_init", "mission_leases", "mission_recovery", "missions", "process_wrap", "provenance_proofs", "search", "tui", "web_explorer"},
+	}
+}
+
 type wrappedCommand struct {
 	MissionID string
 	Agent     string
@@ -982,8 +1055,12 @@ func runDaemon(parent context.Context, db *store.Store, address string, announce
 }
 
 func daemonAvailable() bool {
-	client := http.Client{Timeout: 150 * time.Millisecond}
-	response, err := client.Get("http://127.0.0.1:7331/api/status")
+	return endpointAvailable("http://127.0.0.1:7331/api/status", 150*time.Millisecond)
+}
+
+func endpointAvailable(url string, timeout time.Duration) bool {
+	client := http.Client{Timeout: timeout}
+	response, err := client.Get(url)
 	if err != nil {
 		return false
 	}
@@ -1030,7 +1107,9 @@ func manageService(args []string) error {
 const usage = `ChainProof — durable continuity and provenance for AI agents
 
 Usage:
-  chainproof init                            Initialize local state
+  chainproof capabilities [--json]          Describe shipped machine capabilities
+  chainproof init [--json]                   Initialize local state and identity
+  chainproof doctor [--json]                 Diagnose local state without creating it
   chainproof agent ensure [--profile NAME] [--name NAME] [--harness NAME]
                                               Create or load stable local identity
   chainproof agent rename --name NAME [--profile NAME]

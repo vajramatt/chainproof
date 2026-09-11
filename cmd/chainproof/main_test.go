@@ -5,8 +5,12 @@ import (
 	"encoding/json"
 	"errors"
 	"io"
+	"net/http"
+	"net/http/httptest"
 	"os"
 	"path/filepath"
+	"reflect"
+	"runtime"
 	"strings"
 	"testing"
 	"time"
@@ -15,6 +19,234 @@ import (
 	"github.com/vajramatt/chainproof/internal/proof"
 	"github.com/vajramatt/chainproof/internal/store"
 )
+
+func TestCapabilitiesJSONDescribesCurrentBuild(t *testing.T) {
+	dbPath := filepath.Join(t.TempDir(), "state", "chainproof.db")
+	agentHome := filepath.Join(t.TempDir(), "agents")
+	t.Setenv("CHAINPROOF_DB", dbPath)
+	t.Setenv("CHAINPROOF_AGENT_HOME", agentHome)
+	originalVersion := version
+	version = "test-version"
+	t.Cleanup(func() { version = originalVersion })
+
+	capabilitiesJSON := captureStdout(t, func() error {
+		return run([]string{"capabilities", "--json"})
+	})
+	var capabilities struct {
+		SchemaVersion string            `json:"schema_version"`
+		Product       string            `json:"product"`
+		Version       string            `json:"version"`
+		Platform      map[string]string `json:"platform"`
+		Paths         map[string]string `json:"paths"`
+		Network       map[string]string `json:"network"`
+		Protocols     map[string]string `json:"protocols"`
+		Features      []string          `json:"features"`
+	}
+	if err := json.Unmarshal([]byte(capabilitiesJSON), &capabilities); err != nil {
+		t.Fatal(err)
+	}
+	if capabilities.SchemaVersion != "1" || capabilities.Product != "chainproof" || capabilities.Version != "test-version" {
+		t.Fatalf("unexpected capability identity: %s", capabilitiesJSON)
+	}
+	if capabilities.Platform["os"] != runtime.GOOS || capabilities.Platform["arch"] != runtime.GOARCH {
+		t.Fatalf("unexpected capability platform: %s", capabilitiesJSON)
+	}
+	if capabilities.Paths["ledger"] != dbPath || capabilities.Paths["agent_home"] != agentHome {
+		t.Fatalf("unexpected capability paths: %s", capabilitiesJSON)
+	}
+	if capabilities.Network["default_url"] != "http://127.0.0.1:7331" || capabilities.Network["listen_scope"] != "loopback" || capabilities.Network["authentication"] != "none" {
+		t.Fatalf("unexpected capability network boundary: %s", capabilitiesJSON)
+	}
+	if capabilities.Protocols["provenance"] != "chainproof.bundle.v1" || capabilities.Protocols["continuity"] != "chainproof.continuity.bundle.v1" || capabilities.Protocols["agent_work"] != "chainproof.agent-work.v1" || capabilities.Protocols["agent_identity"] != "chainproof.agent.v1" {
+		t.Fatalf("unexpected capability protocols: %s", capabilitiesJSON)
+	}
+	wantFeatures := []string{"agent_identity", "artifact_store", "codex_collector", "codex_work", "continuity_proofs", "integration_pull", "integration_push", "local_api", "machine_readable_doctor", "machine_readable_init", "mission_leases", "mission_recovery", "missions", "process_wrap", "provenance_proofs", "search", "tui", "web_explorer"}
+	if !reflect.DeepEqual(capabilities.Features, wantFeatures) {
+		t.Fatalf("features = %v, want %v", capabilities.Features, wantFeatures)
+	}
+}
+
+func TestCapabilitiesDoesNotInitializeState(t *testing.T) {
+	root := filepath.Join(t.TempDir(), "missing")
+	t.Setenv("CHAINPROOF_DB", filepath.Join(root, "chainproof.db"))
+	t.Setenv("CHAINPROOF_AGENT_HOME", filepath.Join(root, "agents"))
+	captureStdout(t, func() error { return run([]string{"capabilities", "--json"}) })
+	if _, err := os.Stat(root); !errors.Is(err, os.ErrNotExist) {
+		t.Fatalf("capability discovery created state: %v", err)
+	}
+}
+
+func TestInitJSONCreatesReadyStateWithIdentity(t *testing.T) {
+	root := t.TempDir()
+	dbPath := filepath.Join(root, "state", "chainproof.db")
+	agentHome := filepath.Join(root, "profiles")
+	t.Setenv("CHAINPROOF_DB", dbPath)
+	t.Setenv("CHAINPROOF_AGENT_HOME", agentHome)
+	t.Setenv("CHAINPROOF_AGENT_PROFILE", "bootstrap-agent")
+	t.Setenv("CHAINPROOF_CODEX_DISABLED", "1")
+
+	initJSON := captureStdout(t, func() error { return run([]string{"init", "--json"}) })
+	var result struct {
+		SchemaVersion string `json:"schema_version"`
+		Status        string `json:"status"`
+		Ledger        string `json:"ledger"`
+		Agent         struct {
+			Profile     string `json:"profile"`
+			AgentID     string `json:"agent_id"`
+			DisplayName string `json:"display_name"`
+			PublicKey   string `json:"public_key"`
+		} `json:"agent"`
+	}
+	if err := json.Unmarshal([]byte(initJSON), &result); err != nil {
+		t.Fatal(err)
+	}
+	if result.SchemaVersion != "1" || result.Status != "ready" || result.Ledger != dbPath {
+		t.Fatalf("unexpected init result: %s", initJSON)
+	}
+	if result.Agent.Profile != "bootstrap-agent" || result.Agent.AgentID == "" || result.Agent.DisplayName == "" || result.Agent.PublicKey == "" {
+		t.Fatalf("init omitted identity: %s", initJSON)
+	}
+	for _, path := range []string{dbPath, filepath.Join(agentHome, "bootstrap-agent", "profile.json"), filepath.Join(agentHome, "bootstrap-agent", "identity.key")} {
+		if _, err := os.Stat(path); err != nil {
+			t.Fatalf("init omitted %s: %v", path, err)
+		}
+	}
+}
+
+func TestInitJSONIsIdempotent(t *testing.T) {
+	root := t.TempDir()
+	t.Setenv("CHAINPROOF_DB", filepath.Join(root, "chainproof.db"))
+	t.Setenv("CHAINPROOF_AGENT_HOME", filepath.Join(root, "agents"))
+	t.Setenv("CHAINPROOF_AGENT_PROFILE", "stable-agent")
+	t.Setenv("CHAINPROOF_CODEX_DISABLED", "1")
+	type initResult struct {
+		Status string `json:"status"`
+		Agent  struct {
+			AgentID   string `json:"agent_id"`
+			PublicKey string `json:"public_key"`
+		} `json:"agent"`
+	}
+	decode := func(raw string) initResult {
+		t.Helper()
+		var result initResult
+		if err := json.Unmarshal([]byte(raw), &result); err != nil {
+			t.Fatal(err)
+		}
+		return result
+	}
+	first := decode(captureStdout(t, func() error { return run([]string{"init", "--json"}) }))
+	second := decode(captureStdout(t, func() error { return run([]string{"init", "--json"}) }))
+	if first.Status != "ready" || second.Status != "ready" || first.Agent.AgentID == "" || first.Agent.AgentID != second.Agent.AgentID || first.Agent.PublicKey != second.Agent.PublicKey {
+		t.Fatalf("init identity changed: first=%+v second=%+v", first, second)
+	}
+}
+
+func TestDoctorJSONReportsUninitializedWithoutCreatingState(t *testing.T) {
+	root := filepath.Join(t.TempDir(), "missing")
+	dbPath := filepath.Join(root, "chainproof.db")
+	agentHome := filepath.Join(root, "agents")
+	t.Setenv("CHAINPROOF_DB", dbPath)
+	t.Setenv("CHAINPROOF_AGENT_HOME", agentHome)
+	t.Setenv("CHAINPROOF_AGENT_PROFILE", "doctor-agent")
+
+	doctorJSON := captureStdout(t, func() error { return run([]string{"doctor", "--json"}) })
+	var report struct {
+		SchemaVersion string `json:"schema_version"`
+		Status        string `json:"status"`
+		Paths         struct {
+			Ledger    string `json:"ledger"`
+			AgentHome string `json:"agent_home"`
+		} `json:"paths"`
+		Checks map[string]struct {
+			Status string `json:"status"`
+		} `json:"checks"`
+	}
+	if err := json.Unmarshal([]byte(doctorJSON), &report); err != nil {
+		t.Fatal(err)
+	}
+	if report.SchemaVersion != "1" || report.Status != "uninitialized" || report.Paths.Ledger != dbPath || report.Paths.AgentHome != agentHome {
+		t.Fatalf("unexpected uninitialized report: %s", doctorJSON)
+	}
+	if report.Checks["ledger"].Status != "missing" || report.Checks["agent_identity"].Status != "missing" {
+		t.Fatalf("missing state not diagnosed: %s", doctorJSON)
+	}
+	if _, err := os.Stat(root); !errors.Is(err, os.ErrNotExist) {
+		t.Fatalf("doctor created state: %v", err)
+	}
+}
+
+func TestDoctorJSONValidatesReadyState(t *testing.T) {
+	root := t.TempDir()
+	t.Setenv("CHAINPROOF_DB", filepath.Join(root, "chainproof.db"))
+	t.Setenv("CHAINPROOF_AGENT_HOME", filepath.Join(root, "agents"))
+	t.Setenv("CHAINPROOF_AGENT_PROFILE", "doctor-agent")
+	t.Setenv("CHAINPROOF_CODEX_DISABLED", "1")
+	captureStdout(t, func() error { return run([]string{"init", "--json"}) })
+
+	doctorJSON := captureStdout(t, func() error { return run([]string{"doctor", "--json"}) })
+	var report struct {
+		Status string `json:"status"`
+		Checks map[string]struct {
+			Status string            `json:"status"`
+			Data   map[string]string `json:"data"`
+		} `json:"checks"`
+	}
+	if err := json.Unmarshal([]byte(doctorJSON), &report); err != nil {
+		t.Fatal(err)
+	}
+	if report.Checks["ledger"].Status != "pass" || report.Checks["agent_identity"].Status != "pass" || report.Checks["agent_identity"].Data["agent_id"] == "" {
+		t.Fatalf("ready state not validated: %s", doctorJSON)
+	}
+	if runtime.GOOS == "windows" {
+		if report.Status != "attention" || report.Checks["platform"].Status != "fail" || report.Checks["ledger_permissions"].Status != "not_applicable" {
+			t.Fatalf("unsupported platform report incorrect: %s", doctorJSON)
+		}
+	} else if report.Status != "ready" || report.Checks["platform"].Status != "pass" || report.Checks["ledger_permissions"].Status != "pass" {
+		t.Fatalf("ready report incorrect: %s", doctorJSON)
+	}
+}
+
+func TestDoctorJSONReportsCorruptLedger(t *testing.T) {
+	root := t.TempDir()
+	dbPath := filepath.Join(root, "chainproof.db")
+	t.Setenv("CHAINPROOF_DB", dbPath)
+	t.Setenv("CHAINPROOF_AGENT_HOME", filepath.Join(root, "agents"))
+	t.Setenv("CHAINPROOF_AGENT_PROFILE", "doctor-agent")
+	if err := os.WriteFile(dbPath, []byte("not a sqlite database"), 0600); err != nil {
+		t.Fatal(err)
+	}
+	captureStdout(t, func() error {
+		return run([]string{"agent", "ensure", "--name", "Doctor", "--harness", "codex"})
+	})
+
+	doctorJSON := captureStdout(t, func() error { return run([]string{"doctor", "--json"}) })
+	var report struct {
+		Status string `json:"status"`
+		Checks map[string]struct {
+			Status string `json:"status"`
+		} `json:"checks"`
+	}
+	if err := json.Unmarshal([]byte(doctorJSON), &report); err != nil {
+		t.Fatal(err)
+	}
+	if report.Status != "attention" || report.Checks["ledger"].Status != "fail" || report.Checks["agent_identity"].Status != "pass" {
+		t.Fatalf("corruption not diagnosed: %s", doctorJSON)
+	}
+}
+
+func TestEndpointAvailableHonorsDiagnosticTimeout(t *testing.T) {
+	server := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, _ *http.Request) {
+		time.Sleep(50 * time.Millisecond)
+		w.WriteHeader(http.StatusOK)
+	}))
+	defer server.Close()
+	if endpointAvailable(server.URL, 10*time.Millisecond) {
+		t.Fatal("endpoint responded inside timeout that elapsed before response")
+	}
+	if !endpointAvailable(server.URL, time.Second) {
+		t.Fatal("endpoint was not detected inside diagnostic timeout")
+	}
+}
 
 func TestMissionCLIStartsCheckpointsAndResumes(t *testing.T) {
 	t.Setenv("CHAINPROOF_DB", filepath.Join(t.TempDir(), "chainproof.db"))

@@ -41,6 +41,38 @@ func TestOpenRepairsLedgerFilePermissions(t *testing.T) {
 	}
 }
 
+func TestCheckIntegrityAcceptsHealthyLedger(t *testing.T) {
+	path := t.TempDir() + "/healthy.db"
+	s, err := Open(path)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if err = s.Close(); err != nil {
+		t.Fatal(err)
+	}
+	if err = CheckIntegrity(path); err != nil {
+		t.Fatalf("healthy ledger rejected: %v", err)
+	}
+}
+
+func TestCheckIntegrityRejectsCorruptionWithoutModifyingFile(t *testing.T) {
+	path := t.TempDir() + "/corrupt.db"
+	want := "not a sqlite database"
+	if err := os.WriteFile(path, []byte(want), 0600); err != nil {
+		t.Fatal(err)
+	}
+	if err := CheckIntegrity(path); err == nil {
+		t.Fatal("corrupt ledger passed integrity check")
+	}
+	raw, err := os.ReadFile(path)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if string(raw) != want {
+		t.Fatalf("integrity check modified corrupt ledger: %q", raw)
+	}
+}
+
 func TestLifecycleAndVerification(t *testing.T) {
 	s, e := Open(t.TempDir() + "/test.db")
 	if e != nil {

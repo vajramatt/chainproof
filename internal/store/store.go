@@ -8,7 +8,10 @@ import (
 	"encoding/json"
 	"errors"
 	"fmt"
+	"net/url"
 	"os"
+	"path/filepath"
+	"strings"
 	"time"
 
 	"github.com/google/uuid"
@@ -60,6 +63,46 @@ func Open(path string) (*Store, error) {
 	return s, nil
 }
 func (s *Store) Close() error { return s.db.Close() }
+
+// CheckIntegrity opens an existing ledger read-only and validates SQLite
+// integrity plus core ChainProof tables. It never migrates or repairs state.
+func CheckIntegrity(path string) error {
+	absPath, err := filepath.Abs(path)
+	if err != nil {
+		return err
+	}
+	slashPath := filepath.ToSlash(absPath)
+	if filepath.VolumeName(absPath) != "" && !strings.HasPrefix(slashPath, "/") {
+		slashPath = "/" + slashPath
+	}
+	dsn := (&url.URL{Scheme: "file", Path: slashPath, RawQuery: "mode=ro"}).String()
+	db, err := sql.Open("sqlite", dsn)
+	if err != nil {
+		return err
+	}
+	defer db.Close()
+	db.SetMaxOpenConns(1)
+	ctx, cancel := context.WithTimeout(context.Background(), 5*time.Second)
+	defer cancel()
+	if err = db.PingContext(ctx); err != nil {
+		return fmt.Errorf("open ledger read-only: %w", err)
+	}
+	var result string
+	if err = db.QueryRowContext(ctx, "PRAGMA quick_check").Scan(&result); err != nil {
+		return fmt.Errorf("check ledger integrity: %w", err)
+	}
+	if result != "ok" {
+		return fmt.Errorf("check ledger integrity: %s", result)
+	}
+	var coreTables int
+	if err = db.QueryRowContext(ctx, `SELECT COUNT(*) FROM sqlite_master WHERE type='table' AND name IN ('runs','events')`).Scan(&coreTables); err != nil {
+		return fmt.Errorf("check ledger schema: %w", err)
+	}
+	if coreTables != 2 {
+		return errors.New("check ledger schema: required ChainProof tables missing")
+	}
+	return nil
+}
 
 func (s *Store) Start(ctx context.Context, agent, harness, model string, metadata map[string]any) (proof.Run, error) {
 	if agent == "" {

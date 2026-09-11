@@ -123,6 +123,32 @@ func TestLoadRejectsTamperedPublicProfile(t *testing.T) {
 	}
 }
 
+func TestVerifyRequiresMatchingPrivateKey(t *testing.T) {
+	root := t.TempDir()
+	profile, err := Ensure(root, "default", "Primary", "codex")
+	if err != nil {
+		t.Fatal(err)
+	}
+	verified, err := Verify(root, "default")
+	if err != nil || verified != profile {
+		t.Fatalf("valid identity did not verify: profile=%+v err=%v", verified, err)
+	}
+	otherRoot := t.TempDir()
+	if _, err = Ensure(otherRoot, "other", "Other", "codex"); err != nil {
+		t.Fatal(err)
+	}
+	otherKey, err := os.ReadFile(filepath.Join(otherRoot, "other", "identity.key"))
+	if err != nil {
+		t.Fatal(err)
+	}
+	if err = os.WriteFile(filepath.Join(root, "default", "identity.key"), otherKey, 0600); err != nil {
+		t.Fatal(err)
+	}
+	if _, err = Verify(root, "default"); err == nil || !strings.Contains(err.Error(), "does not match") {
+		t.Fatalf("mismatched private key verified: %v", err)
+	}
+}
+
 func TestRenameChangesDisplayNameWithoutChangingIdentity(t *testing.T) {
 	root := t.TempDir()
 	before, err := Ensure(root, "default", "First name", "codex")

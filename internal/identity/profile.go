@@ -181,6 +181,23 @@ func Load(root, profileName string) (Profile, error) {
 	return profile, nil
 }
 
+// Verify checks public profile integrity and possession of its matching local
+// private key without creating or changing identity files.
+func Verify(root, profileName string) (Profile, error) {
+	profile, err := Load(root, profileName)
+	if err != nil {
+		return Profile{}, err
+	}
+	privateKey, err := loadPrivateKey(filepath.Join(root, profileName, "identity.key"))
+	if err != nil {
+		return Profile{}, err
+	}
+	if !publicKeysEqual(profile.PublicKey, privateKey.Public().(ed25519.PublicKey)) {
+		return Profile{}, errors.New("agent profile public key does not match private key")
+	}
+	return profile, nil
+}
+
 // Extension returns versioned public attribution suitable for run metadata,
 // mission metadata, checkpoint extensions, and event extensions.
 func Extension(profile Profile, workerID, role string) map[string]any {
