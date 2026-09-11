@@ -17,6 +17,7 @@ import (
 	"testing"
 	"time"
 
+	backupstore "github.com/vajramatt/chainproof/internal/backup"
 	"github.com/vajramatt/chainproof/internal/continuity"
 	"github.com/vajramatt/chainproof/internal/identity"
 	"github.com/vajramatt/chainproof/internal/proof"
@@ -54,6 +55,8 @@ func TestStructuredCommandErrorContract(t *testing.T) {
 		{name: "usage", err: errors.New(`unknown command "bogus"`), wantCode: "usage", wantExit: 2},
 		{name: "verification", err: errors.New("verification failed"), wantCode: "verification_failed", wantExit: 3},
 		{name: "incomplete identity", err: fmt.Errorf("%w: private key is missing", identity.ErrIncomplete), wantCode: "identity_incomplete", wantExit: 1},
+		{name: "invalid backup", err: fmt.Errorf("%w: checksum mismatch", backupstore.ErrInvalid), wantCode: "backup_invalid", wantExit: 1},
+		{name: "destination exists", err: fmt.Errorf("%w: path", backupstore.ErrDestinationExists), wantCode: "destination_exists", wantExit: 1},
 		{name: "command", err: errors.New("database is locked"), wantCode: "command_failed", wantExit: 1},
 	}
 	for _, tt := range tests {
@@ -184,7 +187,7 @@ func TestCapabilitiesJSONDescribesCurrentBuild(t *testing.T) {
 	if capabilities.Protocols["provenance"] != "chainproof.bundle.v1" || capabilities.Protocols["continuity"] != "chainproof.continuity.bundle.v1" || capabilities.Protocols["agent_work"] != "chainproof.agent-work.v1" || capabilities.Protocols["agent_identity"] != "chainproof.agent.v1" {
 		t.Fatalf("unexpected capability protocols: %s", capabilitiesJSON)
 	}
-	wantFeatures := []string{"agent_identity", "artifact_store", "codex_collector", "codex_work", "continuity_proofs", "independent_process_coordination", "integration_pull", "integration_push", "local_api", "machine_readable_doctor", "machine_readable_init", "mission_leases", "mission_recovery", "missions", "process_wrap", "provenance_proofs", "search", "stable_exit_codes", "structured_errors", "tui", "web_explorer"}
+	wantFeatures := []string{"agent_identity", "artifact_store", "codex_collector", "codex_work", "continuity_proofs", "independent_process_coordination", "instance_backup_restore", "integration_pull", "integration_push", "local_api", "machine_readable_doctor", "machine_readable_init", "mission_leases", "mission_recovery", "missions", "process_wrap", "provenance_proofs", "search", "stable_exit_codes", "structured_errors", "tui", "web_explorer"}
 	if !reflect.DeepEqual(capabilities.Features, wantFeatures) {
 		t.Fatalf("features = %v, want %v", capabilities.Features, wantFeatures)
 	}
@@ -429,6 +432,59 @@ func TestDoctorJSONReportsCorruptLedger(t *testing.T) {
 	}
 	if report.Status != "attention" || report.Checks["ledger"].Status != "fail" || report.Checks["agent_identity"].Status != "pass" {
 		t.Fatalf("corruption not diagnosed: %s", doctorJSON)
+	}
+}
+
+func TestBackupAndRestoreCLIProducesReadyIsolatedInstance(t *testing.T) {
+	root := t.TempDir()
+	dbPath := filepath.Join(root, "live", "chainproof.db")
+	agentHome := filepath.Join(root, "live", "agents")
+	t.Setenv("CHAINPROOF_DB", dbPath)
+	t.Setenv("CHAINPROOF_AGENT_HOME", agentHome)
+	t.Setenv("CHAINPROOF_AGENT_PROFILE", "backup-agent")
+	t.Setenv("CHAINPROOF_CODEX_DISABLED", "1")
+	captureStdout(t, func() error { return run([]string{"init", "--json"}) })
+
+	backupPath := filepath.Join(root, "backups", "snapshot")
+	backupJSON := captureStdout(t, func() error { return run([]string{"backup", backupPath}) })
+	var backupResult struct {
+		SchemaVersion string `json:"schema_version"`
+		Status        string `json:"status"`
+		Path          string `json:"path"`
+		Manifest      struct {
+			Format string `json:"format"`
+		} `json:"manifest"`
+	}
+	if err := json.Unmarshal([]byte(backupJSON), &backupResult); err != nil {
+		t.Fatal(err)
+	}
+	if backupResult.SchemaVersion != "1" || backupResult.Status != "backed_up" || backupResult.Path != backupPath || backupResult.Manifest.Format != "chainproof.backup.v1" {
+		t.Fatalf("unexpected backup result: %s", backupJSON)
+	}
+
+	restorePath := filepath.Join(root, "restored", "instance")
+	restoreJSON := captureStdout(t, func() error { return run([]string{"restore", backupPath, restorePath}) })
+	var restoreResult struct {
+		SchemaVersion string `json:"schema_version"`
+		Status        string `json:"status"`
+		Path          string `json:"path"`
+		Ledger        string `json:"ledger"`
+		AgentHome     string `json:"agent_home"`
+	}
+	if err := json.Unmarshal([]byte(restoreJSON), &restoreResult); err != nil {
+		t.Fatal(err)
+	}
+	if restoreResult.SchemaVersion != "1" || restoreResult.Status != "restored" || restoreResult.Path != restorePath || restoreResult.Ledger != filepath.Join(restorePath, "chainproof.db") || restoreResult.AgentHome != filepath.Join(restorePath, "agents") {
+		t.Fatalf("unexpected restore result: %s", restoreJSON)
+	}
+	t.Setenv("CHAINPROOF_DB", restoreResult.Ledger)
+	t.Setenv("CHAINPROOF_AGENT_HOME", restoreResult.AgentHome)
+	doctorJSON := captureStdout(t, func() error { return run([]string{"doctor", "--json"}) })
+	var doctor struct {
+		Status string `json:"status"`
+	}
+	if err := json.Unmarshal([]byte(doctorJSON), &doctor); err != nil || doctor.Status != "ready" {
+		t.Fatalf("restored instance is not ready: %s err=%v", doctorJSON, err)
 	}
 }
 

@@ -50,7 +50,7 @@ type privateKeyFile struct {
 // Ensure loads a named profile or creates it once. Later display-name and
 // harness arguments do not mutate an established identity.
 func Ensure(root, profileName, displayName, harness string) (Profile, error) {
-	if err := validateProfileName(profileName); err != nil {
+	if err := ValidateProfileName(profileName); err != nil {
 		return Profile{}, err
 	}
 	dir := filepath.Join(root, profileName)
@@ -153,7 +153,7 @@ func Ensure(root, profileName, displayName, harness string) (Profile, error) {
 
 // Rename changes public presentation without rotating key-derived identity.
 func Rename(root, profileName, displayName string) (Profile, error) {
-	if err := validateProfileName(profileName); err != nil {
+	if err := ValidateProfileName(profileName); err != nil {
 		return Profile{}, err
 	}
 	displayName = strings.TrimSpace(displayName)
@@ -180,7 +180,7 @@ func Rename(root, profileName, displayName string) (Profile, error) {
 
 // Load reads and validates public profile material.
 func Load(root, profileName string) (Profile, error) {
-	if err := validateProfileName(profileName); err != nil {
+	if err := ValidateProfileName(profileName); err != nil {
 		return Profile{}, err
 	}
 	path := filepath.Join(root, profileName, "profile.json")
@@ -285,7 +285,7 @@ func ValidateExtension(value any) error {
 	if err != nil {
 		return err
 	}
-	if err = validateProfileName(profileName); err != nil {
+	if err = ValidateProfileName(profileName); err != nil {
 		return err
 	}
 	displayName, err := stringField("display_name")
@@ -348,7 +348,8 @@ func NewWorkerID() (string, error) {
 	return "worker:" + hex.EncodeToString(raw), nil
 }
 
-func validateProfileName(name string) error {
+// ValidateProfileName rejects names that could escape an agent-home directory.
+func ValidateProfileName(name string) error {
 	if !profileNamePattern.MatchString(name) || name == "." || name == ".." {
 		return fmt.Errorf("invalid agent profile name %q", name)
 	}

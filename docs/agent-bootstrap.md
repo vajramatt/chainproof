@@ -122,11 +122,29 @@ Stable exit classes:
 - `1`, `command_failed`: command could not complete
 - `1`, `identity_incomplete`: one established identity file is missing; no
   replacement was generated
+- `1`, `backup_invalid`: backup manifest, file hashes, ledger, or identities
+  failed verification
+- `1`, `destination_exists`: backup or restore refused to overwrite a path
 - `2`, `usage`: arguments or command name are invalid
 - `3`, `verification_failed`: proof verification rejected input
 
 Flag parsing is quiet, so structured stderr is never prefixed by parser prose.
 Unknown commands are rejected before database or identity initialization.
+
+## Back up and restore without overwriting state
+
+`chainproof backup BACKUP_DIR` emits schema `1` JSON with status `backed_up`,
+the absolute backup path, and a `chainproof.backup.v1` manifest. Snapshot
+creation remains consistent while independent writers append to the WAL
+ledger. It includes every valid local identity, including private keys.
+
+`chainproof restore BACKUP_DIR NEW_INSTANCE_DIR` verifies every declared file
+hash, SQLite integrity, every run and mission proof chain, content-addressed
+artifacts, and profile/key pairing before it emits status `restored`. It copies
+only manifest-declared files and refuses any existing destination. Returned
+`ledger` and `agent_home` fields can be assigned to `CHAINPROOF_DB` and
+`CHAINPROOF_AGENT_HOME`; restore never switches or overwrites the running
+instance automatically.
 
 ## Keep configured state across login
 

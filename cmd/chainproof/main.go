@@ -20,6 +20,7 @@ import (
 	"time"
 
 	codexadapter "github.com/vajramatt/chainproof/internal/adapters/codex"
+	backupstore "github.com/vajramatt/chainproof/internal/backup"
 	"github.com/vajramatt/chainproof/internal/continuity"
 	"github.com/vajramatt/chainproof/internal/identity"
 	"github.com/vajramatt/chainproof/internal/proof"
@@ -99,6 +100,10 @@ func classifyCommandError(err error) (string, int) {
 		return "usage", 2
 	case errors.Is(err, identity.ErrIncomplete):
 		return "identity_incomplete", 1
+	case errors.Is(err, backupstore.ErrInvalid):
+		return "backup_invalid", 1
+	case errors.Is(err, backupstore.ErrDestinationExists):
+		return "destination_exists", 1
 	case strings.Contains(message, "verification failed"):
 		return "verification_failed", 3
 	default:
@@ -186,6 +191,27 @@ func run(args []string) error {
 	if args[0] == "service" {
 		return manageService(args[1:])
 	}
+	if args[0] == "restore" {
+		if len(args) != 3 {
+			return errors.New("usage: chainproof restore BACKUP_DIR NEW_INSTANCE_DIR")
+		}
+		manifest, restoreErr := backupstore.Restore(args[1], args[2])
+		if restoreErr != nil {
+			return restoreErr
+		}
+		path, restoreErr := filepath.Abs(args[2])
+		if restoreErr != nil {
+			return restoreErr
+		}
+		return output(struct {
+			SchemaVersion string               `json:"schema_version"`
+			Status        string               `json:"status"`
+			Path          string               `json:"path"`
+			Ledger        string               `json:"ledger"`
+			AgentHome     string               `json:"agent_home"`
+			Manifest      backupstore.Manifest `json:"manifest"`
+		}{"1", "restored", path, filepath.Join(path, "chainproof.db"), filepath.Join(path, "agents"), manifest}, nil)
+	}
 	dbPath, e := configuredDBPath()
 	if e != nil {
 		return e
@@ -212,6 +238,24 @@ func run(args []string) error {
 	defer db.Close()
 	ctx := context.Background()
 	switch args[0] {
+	case "backup":
+		if len(args) != 2 {
+			return errors.New("usage: chainproof backup BACKUP_DIR")
+		}
+		manifest, backupErr := backupstore.Create(ctx, db, agentRoot(dbPath), args[1])
+		if backupErr != nil {
+			return backupErr
+		}
+		path, backupErr := filepath.Abs(args[1])
+		if backupErr != nil {
+			return backupErr
+		}
+		return output(struct {
+			SchemaVersion string               `json:"schema_version"`
+			Status        string               `json:"status"`
+			Path          string               `json:"path"`
+			Manifest      backupstore.Manifest `json:"manifest"`
+		}{"1", "backed_up", path, manifest}, nil)
 	case "init":
 		fs := commandFlagSet("init")
 		jsonOutput := fs.Bool("json", false, "")
@@ -734,7 +778,7 @@ func knownCommand(name string) bool {
 	switch name {
 	case "version", "--version", "help", "--help", "-h",
 		"capabilities", "doctor", "verify-file", "verify-continuity-file",
-		"service", "agent", "whoami", "init", "mission", "start",
+		"service", "agent", "whoami", "init", "backup", "restore", "mission", "start",
 		"append", "ingest", "pull", "complete", "verify", "export",
 		"list", "search", "checkpoint", "resume", "context", "recovery",
 		"codex", "run", "ui", "serve", "daemon":
@@ -778,7 +822,7 @@ func capabilityDocument(dbPath string) any {
 			"continuity":     "chainproof.continuity.bundle.v1",
 			"provenance":     "chainproof.bundle.v1",
 		},
-		Features: []string{"agent_identity", "artifact_store", "codex_collector", "codex_work", "continuity_proofs", "independent_process_coordination", "integration_pull", "integration_push", "local_api", "machine_readable_doctor", "machine_readable_init", "mission_leases", "mission_recovery", "missions", "process_wrap", "provenance_proofs", "search", "stable_exit_codes", "structured_errors", "tui", "web_explorer"},
+		Features: []string{"agent_identity", "artifact_store", "codex_collector", "codex_work", "continuity_proofs", "independent_process_coordination", "instance_backup_restore", "integration_pull", "integration_push", "local_api", "machine_readable_doctor", "machine_readable_init", "mission_leases", "mission_recovery", "missions", "process_wrap", "provenance_proofs", "search", "stable_exit_codes", "structured_errors", "tui", "web_explorer"},
 	}
 }
 
@@ -1236,6 +1280,8 @@ Usage:
   chainproof capabilities [--json]          Describe shipped machine capabilities
   chainproof init [--json]                   Initialize local state and identity
   chainproof doctor [--json]                 Diagnose local state without creating it
+  chainproof backup BACKUP_DIR               Snapshot ledger and all local identities
+  chainproof restore BACKUP_DIR NEW_DIR      Verify and restore into a new directory
   chainproof agent ensure [--profile NAME] [--name NAME] [--harness NAME]
                                               Create or load stable local identity
   chainproof agent rename --name NAME [--profile NAME]

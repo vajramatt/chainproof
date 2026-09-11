@@ -72,6 +72,31 @@ func Open(path string) (*Store, error) {
 }
 func (s *Store) Close() error { return s.db.Close() }
 
+// Backup writes a transactionally consistent SQLite snapshot to a new file.
+// SQLite refuses an existing destination, so this method never overwrites a
+// previous backup.
+func (s *Store) Backup(ctx context.Context, destination string) error {
+	if strings.TrimSpace(destination) == "" {
+		return errors.New("backup destination is required")
+	}
+	absDestination, err := filepath.Abs(destination)
+	if err != nil {
+		return err
+	}
+	if _, err = os.Stat(absDestination); err == nil {
+		return fmt.Errorf("backup destination already exists: %s", absDestination)
+	} else if !errors.Is(err, os.ErrNotExist) {
+		return err
+	}
+	if _, err = s.db.ExecContext(ctx, "VACUUM INTO ?", absDestination); err != nil {
+		return fmt.Errorf("create ledger backup: %w", err)
+	}
+	if err = os.Chmod(absDestination, 0600); err != nil {
+		return fmt.Errorf("secure ledger backup permissions: %w", err)
+	}
+	return nil
+}
+
 // CheckIntegrity opens an existing ledger read-only and validates SQLite
 // integrity plus core ChainProof tables. It never migrates or repairs state.
 func CheckIntegrity(path string) error {
@@ -110,6 +135,85 @@ func CheckIntegrity(path string) error {
 		return errors.New("check ledger schema: required ChainProof tables missing")
 	}
 	return nil
+}
+
+// CheckProofIntegrity verifies every run chain, mission checkpoint chain, and
+// content-addressed artifact in an existing ledger without modifying it.
+func CheckProofIntegrity(path string) error {
+	absPath, err := filepath.Abs(path)
+	if err != nil {
+		return err
+	}
+	slashPath := filepath.ToSlash(absPath)
+	if filepath.VolumeName(absPath) != "" && !strings.HasPrefix(slashPath, "/") {
+		slashPath = "/" + slashPath
+	}
+	dsn := (&url.URL{Scheme: "file", Path: slashPath, RawQuery: "mode=ro"}).String()
+	db, err := sql.Open("sqlite", dsn)
+	if err != nil {
+		return err
+	}
+	defer db.Close()
+	db.SetMaxOpenConns(1)
+	ctx, cancel := context.WithTimeout(context.Background(), 30*time.Second)
+	defer cancel()
+	if err = db.PingContext(ctx); err != nil {
+		return fmt.Errorf("open ledger read-only: %w", err)
+	}
+	ledger := &Store{db: db}
+	runIDs, err := textColumn(ctx, db, `SELECT run_id FROM runs ORDER BY run_id`)
+	if err != nil {
+		return fmt.Errorf("list backup runs: %w", err)
+	}
+	for _, runID := range runIDs {
+		if verification := ledger.Verify(ctx, runID); !verification.Valid {
+			return fmt.Errorf("run proof verification failed for %s: %s", runID, verification.Reason)
+		}
+	}
+	missionIDs, err := textColumn(ctx, db, `SELECT mission_id FROM missions ORDER BY mission_id`)
+	if err != nil {
+		return fmt.Errorf("list backup missions: %w", err)
+	}
+	for _, missionID := range missionIDs {
+		if _, err = ledger.MissionBundle(ctx, missionID); err != nil {
+			return fmt.Errorf("mission proof verification failed for %s: %w", missionID, err)
+		}
+	}
+	rows, err := db.QueryContext(ctx, `SELECT hash,body,size FROM artifacts ORDER BY hash`)
+	if err != nil {
+		return fmt.Errorf("list backup artifacts: %w", err)
+	}
+	defer rows.Close()
+	for rows.Next() {
+		var expected string
+		var body []byte
+		var size int64
+		if err = rows.Scan(&expected, &body, &size); err != nil {
+			return err
+		}
+		sum := sha256.Sum256(body)
+		if expected != hex.EncodeToString(sum[:]) || size != int64(len(body)) {
+			return fmt.Errorf("artifact proof verification failed for %s", expected)
+		}
+	}
+	return rows.Err()
+}
+
+func textColumn(ctx context.Context, db *sql.DB, query string) ([]string, error) {
+	rows, err := db.QueryContext(ctx, query)
+	if err != nil {
+		return nil, err
+	}
+	defer rows.Close()
+	values := []string{}
+	for rows.Next() {
+		var value string
+		if err = rows.Scan(&value); err != nil {
+			return nil, err
+		}
+		values = append(values, value)
+	}
+	return values, rows.Err()
 }
 
 func (s *Store) Start(ctx context.Context, agent, harness, model string, metadata map[string]any) (proof.Run, error) {

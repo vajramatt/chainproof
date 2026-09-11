@@ -117,7 +117,8 @@ explorer, and loopback API. Broader unattended use needs these release gates:
    failure tests cover corrupt profiles, corrupt or mismatched keys, and either
    identity file going missing without silent replacement. Installer tests
    cover atomic executable upgrades, state preservation, and checksum-failure
-   rollback. Backup/restore still needs deeper failure testing.
+   rollback. Current `main` also tests consistent full-instance backup and
+   non-destructive restore. Clean-install validation remains.
 3. **Clean-install verification.** Exercise release archives, checksums,
    installer, first-run profile creation, service setup, TUI, loopback web
    explorer, and uninstall behavior on clean supported macOS and Linux systems.
@@ -188,6 +189,27 @@ the executable only after verification. Existing ledger and identity state are
 not changed. The database opens at `~/.chainproof/chainproof.db`; set
 `CHAINPROOF_DB` to put it somewhere else. Local agent profiles live beside the
 database under `agents/`.
+
+## Back up and restore an instance
+
+Current `main` can create a consistent backup while local writers remain
+active, then verify and restore it into a new directory:
+
+```sh
+chainproof backup /secure/backups/chainproof-2026-09-10
+chainproof restore /secure/backups/chainproof-2026-09-10 /srv/chainproof-restored
+CHAINPROOF_DB=/srv/chainproof-restored/chainproof.db \
+CHAINPROOF_AGENT_HOME=/srv/chainproof-restored/agents \
+chainproof doctor --json
+```
+
+Backup format `chainproof.backup.v1` contains a transactionally consistent
+SQLite snapshot, every valid local agent profile and private key, and a
+SHA-256 manifest. Creation and restore stage privately, verify before
+publication, validate every run and mission proof chain plus content-addressed
+artifact, and refuse existing destinations. Restore never overwrites the
+configured live instance. Because backups contain identity private keys, keep
+them under owner-only storage controls.
 
 ## Open it
 
@@ -695,6 +717,8 @@ It does not edit the repositories or harness histories it observes.
 | `chainproof capabilities --json` | describe current build, paths, protocols, and shipped features without creating state |
 | `chainproof init --json` | idempotently initialize ledger and stable local identity |
 | `chainproof doctor --json` | diagnose platform, ledger, permissions, identity, and loopback API without creating state |
+| `chainproof backup BACKUP_DIR` | create verified full-instance backup without stopping writers |
+| `chainproof restore BACKUP_DIR NEW_DIR` | verify and restore into a new, non-existing instance directory |
 | `chainproof agent ensure` | create or load stable local agent identity |
 | `chainproof agent rename` | change readable name without rotating stable ID |
 | `chainproof whoami` | print current public agent identity |

@@ -102,6 +102,19 @@ ChainProof reports failure and does not silently replace or reconstruct it.
 Version 1 has no automatic key recovery: protect profile directories in backups
 and use a deliberately new profile when recovery is impossible.
 
+Full-instance backups contain the SQLite ledger, artifacts stored inside it,
+and every local agent private key. Treat a backup as sensitive as the live
+profile directory. Backup and restore refuse existing destinations, reject
+symlinks and undeclared paths, verify every manifest hash, and validate ledger
+integrity plus profile/key pairing before publishing a result. Restore creates
+a separate instance directory; it never replaces configured live state.
+
+Backup manifest is not signed or externally anchored. Verification detects
+changes relative to manifest being checked, but attacker able to replace both
+backup and manifest can substitute a different internally valid instance.
+Retain manifest digest or another trusted reference outside backup when that
+threat matters.
+
 ## Installation and updates
 
 Release installer downloads archive and `checksums.txt` from same GitHub

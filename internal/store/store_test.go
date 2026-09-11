@@ -3,6 +3,7 @@ package store
 import (
 	"context"
 	"os"
+	"path/filepath"
 	"reflect"
 	"runtime"
 	"strings"
@@ -11,6 +12,106 @@ import (
 	"github.com/vajramatt/chainproof/internal/identity"
 	"github.com/vajramatt/chainproof/internal/proof"
 )
+
+func TestBackupCreatesConsistentReadOnlySnapshotWithoutOverwriting(t *testing.T) {
+	ctx := context.Background()
+	root := t.TempDir()
+	storePath := filepath.Join(root, "live.db")
+	s, err := Open(storePath)
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer s.Close()
+	run, err := s.Start(ctx, "backup-agent", "test", "model", nil)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if _, err = s.Append(ctx, run.ID, proof.EventInput{Kind: "before-backup"}); err != nil {
+		t.Fatal(err)
+	}
+
+	backupPath := filepath.Join(root, "snapshot.db")
+	if err = s.Backup(ctx, backupPath); err != nil {
+		t.Fatal(err)
+	}
+	if err = CheckIntegrity(backupPath); err != nil {
+		t.Fatalf("backup failed integrity check: %v", err)
+	}
+	backupStore, err := Open(backupPath)
+	if err != nil {
+		t.Fatal(err)
+	}
+	backupRun, err := backupStore.Run(ctx, run.ID)
+	closeErr := backupStore.Close()
+	if err != nil || closeErr != nil {
+		t.Fatalf("read backup: run_err=%v close_err=%v", err, closeErr)
+	}
+	if backupRun.EntryCount != 1 {
+		t.Fatalf("backup entry count = %d, want 1", backupRun.EntryCount)
+	}
+
+	if err = os.WriteFile(filepath.Join(root, "existing.db"), []byte("preserve"), 0600); err != nil {
+		t.Fatal(err)
+	}
+	existingPath := filepath.Join(root, "existing.db")
+	if err = s.Backup(ctx, existingPath); err == nil {
+		t.Fatal("backup overwrote existing destination")
+	}
+	raw, err := os.ReadFile(existingPath)
+	if err != nil || string(raw) != "preserve" {
+		t.Fatalf("failed backup changed destination: data=%q err=%v", raw, err)
+	}
+}
+
+func TestBackupRemainsVerifiableDuringIndependentWrites(t *testing.T) {
+	ctx := context.Background()
+	root := t.TempDir()
+	ledgerPath := filepath.Join(root, "live.db")
+	reader, err := Open(ledgerPath)
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer reader.Close()
+	writer, err := Open(ledgerPath)
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer writer.Close()
+	run, err := writer.Start(ctx, "writer", "test", "model", nil)
+	if err != nil {
+		t.Fatal(err)
+	}
+	started := make(chan struct{})
+	done := make(chan error, 1)
+	go func() {
+		for index := 0; index < 50; index++ {
+			if _, appendErr := writer.Append(ctx, run.ID, proof.EventInput{Kind: "concurrent-backup"}); appendErr != nil {
+				done <- appendErr
+				return
+			}
+			if index == 0 {
+				close(started)
+			}
+		}
+		done <- nil
+	}()
+	<-started
+	backupPath := filepath.Join(root, "snapshot.db")
+	if err = reader.Backup(ctx, backupPath); err != nil {
+		t.Fatal(err)
+	}
+	if err = <-done; err != nil {
+		t.Fatal(err)
+	}
+	snapshot, err := Open(backupPath)
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer snapshot.Close()
+	if verification := snapshot.Verify(ctx, run.ID); !verification.Valid {
+		t.Fatalf("concurrent backup is not verifiable: %+v", verification)
+	}
+}
 
 func TestOpenRepairsLedgerFilePermissions(t *testing.T) {
 	if runtime.GOOS == "windows" {

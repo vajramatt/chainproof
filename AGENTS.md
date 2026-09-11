@@ -71,6 +71,8 @@ formats, and release artifacts.
   ledger is the source of truth.
 - Keep portable proof formats independent from SQLite. Treat Markdown as a
   generated readable view, not canonical multi-agent coordination state.
+- Keep full-instance backup and restore non-destructive: verify manifest,
+  ledger, and identities before publication, and never overwrite a destination.
 - Update tests and documentation with behavior changes.
 - Do not edit generated release artifacts directly.
 
