@@ -115,6 +115,15 @@ backup and manifest can substitute a different internally valid instance.
 Retain manifest digest or another trusted reference outside backup when that
 threat matters.
 
+Mission import accepts only a fully verified continuity bundle and writes it in
+one transaction. Any destination mission, run, event, or checkpoint ID
+collision aborts without merge or overwrite. Import recreates canonical proof
+records and derived search rows only; it does not import local leases, identity
+profiles, private keys, or artifact bodies. Imported attribution remains
+unsigned metadata. Do not continue same active mission on source and
+destination concurrently; version 1 has no authenticated multi-host ownership
+or fork reconciliation.
+
 ## Installation and updates
 
 Release installer downloads archive and `checksums.txt` from same GitHub

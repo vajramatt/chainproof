@@ -104,6 +104,10 @@ func classifyCommandError(err error) (string, int) {
 		return "backup_invalid", 1
 	case errors.Is(err, backupstore.ErrDestinationExists):
 		return "destination_exists", 1
+	case errors.Is(err, store.ErrInvalidMissionImport):
+		return "mission_import_invalid", 3
+	case errors.Is(err, store.ErrMissionImportCollision):
+		return "mission_import_collision", 1
 	case strings.Contains(message, "verification failed"):
 		return "verification_failed", 3
 	default:
@@ -281,7 +285,7 @@ func run(args []string) error {
 		return nil
 	case "mission":
 		if len(args) < 2 {
-			return errors.New("usage: chainproof mission start|list|acquire|complete|export|claim|lease|renew|handoff|release")
+			return errors.New("usage: chainproof mission start|list|acquire|complete|export|import|claim|lease|renew|handoff|release")
 		}
 		switch args[1] {
 		case "start":
@@ -341,6 +345,30 @@ func run(args []string) error {
 			}
 			fmt.Println(args[3])
 			return nil
+		case "import":
+			if len(args) != 3 {
+				return errors.New("usage: chainproof mission import PROOF.json")
+			}
+			raw, readErr := os.ReadFile(args[2])
+			if readErr != nil {
+				return readErr
+			}
+			var bundle continuity.Bundle
+			if decodeErr := json.Unmarshal(raw, &bundle); decodeErr != nil {
+				return fmt.Errorf("%w: decode continuity bundle: %v", store.ErrInvalidMissionImport, decodeErr)
+			}
+			result, importErr := db.ImportMission(ctx, bundle)
+			if importErr != nil {
+				return importErr
+			}
+			return output(struct {
+				SchemaVersion       string             `json:"schema_version"`
+				Status              string             `json:"status"`
+				Mission             continuity.Mission `json:"mission"`
+				RunsImported        int                `json:"runs_imported"`
+				EventsImported      int                `json:"events_imported"`
+				CheckpointsImported int                `json:"checkpoints_imported"`
+			}{"1", "imported", result.Mission, result.RunCount, result.EventCount, result.CheckpointCount}, nil)
 		case "claim":
 			if len(args) < 3 {
 				return errors.New("usage: chainproof mission claim MISSION_ID --holder HOLDER [--ttl 30m]")
@@ -429,7 +457,7 @@ func run(args []string) error {
 			lease, releaseErr := db.ReleaseMission(ctx, args[2], args[3])
 			return output(lease, releaseErr)
 		default:
-			return errors.New("usage: chainproof mission start|list|acquire|complete|export|claim|lease|renew|handoff|release")
+			return errors.New("usage: chainproof mission start|list|acquire|complete|export|import|claim|lease|renew|handoff|release")
 		}
 	case "start":
 		fs := commandFlagSet("start")
@@ -822,7 +850,7 @@ func capabilityDocument(dbPath string) any {
 			"continuity":     "chainproof.continuity.bundle.v1",
 			"provenance":     "chainproof.bundle.v1",
 		},
-		Features: []string{"agent_identity", "artifact_store", "codex_collector", "codex_work", "continuity_proofs", "independent_process_coordination", "instance_backup_restore", "integration_pull", "integration_push", "local_api", "machine_readable_doctor", "machine_readable_init", "mission_leases", "mission_recovery", "missions", "process_wrap", "provenance_proofs", "search", "stable_exit_codes", "structured_errors", "tui", "web_explorer"},
+		Features: []string{"agent_identity", "artifact_store", "codex_collector", "codex_work", "continuity_proofs", "independent_process_coordination", "instance_backup_restore", "integration_pull", "integration_push", "local_api", "machine_readable_doctor", "machine_readable_init", "mission_import", "mission_leases", "mission_recovery", "missions", "process_wrap", "provenance_proofs", "search", "stable_exit_codes", "structured_errors", "tui", "web_explorer"},
 	}
 }
 
@@ -1300,6 +1328,7 @@ Usage:
                                               Atomically claim available verified work
   chainproof mission complete MISSION_ID      Close after a valid checkpoint
   chainproof mission export MISSION_ID [FILE] Export portable continuity proof
+  chainproof mission import PROOF.json        Verify and rebuild portable mission
   chainproof mission claim MISSION_ID [--holder H] [--ttl 30m]
                                               Atomically claim active mission
   chainproof mission lease MISSION_ID [--history]

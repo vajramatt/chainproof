@@ -84,6 +84,26 @@ numbers below the anchored entry count.
 
 Offline verification checks both chains and requires every bundled run proof
 to match its checkpoint's run ID, entry count, and chain head exactly.
+Every checkpoint and commitment evidence reference MUST identify an event in
+that checkpoint's bundled run prefix.
+When multiple checkpoints cite same run ID, every overlapping event in their
+run proofs MUST have same event hash. A conflicting prefix is a run fork and
+invalidates whole bundle.
+
+## Local import
+
+A conforming importer MUST verify whole portable bundle before mutation and
+MUST commit canonical mission, checkpoint, run, and event records atomically.
+It MUST preserve their identifiers, timestamps, hashes, provenance modes, and
+mission lifecycle status. Repeated consistent prefixes for same run MAY be
+coalesced into longest bundled prefix. Rebuildable indexes MAY be regenerated.
+
+Import is not a merge protocol. An importer MUST refuse destination identifier
+collisions, MUST reject duplicate checkpoint or event identifiers inside input,
+and MUST NOT partially apply rejected bundle. Continuity v1 contains
+no mission leases, agent private keys, or artifact bodies, so those are not
+rehydrated from bundle. Continuing same active mission on multiple hosts can
+fork later work and is outside v1 coordination boundary.
 
 ## Derived context envelope
 

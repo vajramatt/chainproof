@@ -253,14 +253,52 @@ func VerifyBundle(bundle Bundle) Verification {
 	if len(bundle.RunProofs) != len(bundle.Checkpoints) {
 		return Verification{Valid: false, Reason: "run_proof_count_mismatch", CheckpointCount: len(bundle.Checkpoints), ChainHead: verification.ChainHead}
 	}
+	runPrefixes := map[string][]proof.Event{}
 	for i, checkpoint := range bundle.Checkpoints {
 		runProof := bundle.RunProofs[i]
 		if runProof.Run.ID != checkpoint.Run.RunID || runProof.Run.EntryCount != checkpoint.Run.EntryCount || runProof.Run.ChainHead != checkpoint.Run.ChainHead || !proof.VerifyBundle(runProof).Valid {
 			sequence := i
 			return Verification{Valid: false, Reason: "run_anchor_invalid", Sequence: &sequence, CheckpointCount: len(bundle.Checkpoints), ChainHead: verification.ChainHead}
 		}
+		anchoredEvents := make(map[string]struct{}, len(runProof.Events))
+		for _, event := range runProof.Events {
+			anchoredEvents[event.ID] = struct{}{}
+		}
+		if !evidenceWithinAnchor(checkpoint.Evidence, anchoredEvents) {
+			sequence := i
+			return Verification{Valid: false, Reason: "evidence_anchor_invalid", Sequence: &sequence, CheckpointCount: len(bundle.Checkpoints), ChainHead: verification.ChainHead}
+		}
+		for _, commitment := range checkpoint.Commitments {
+			if !evidenceWithinAnchor(commitment.Evidence, anchoredEvents) {
+				sequence := i
+				return Verification{Valid: false, Reason: "evidence_anchor_invalid", Sequence: &sequence, CheckpointCount: len(bundle.Checkpoints), ChainHead: verification.ChainHead}
+			}
+		}
+		if prior, exists := runPrefixes[runProof.Run.ID]; exists {
+			shared := min(len(prior), len(runProof.Events))
+			for eventIndex := 0; eventIndex < shared; eventIndex++ {
+				if prior[eventIndex].EventHash != runProof.Events[eventIndex].EventHash {
+					sequence := i
+					return Verification{Valid: false, Reason: "run_proof_fork", Sequence: &sequence, CheckpointCount: len(bundle.Checkpoints), ChainHead: verification.ChainHead}
+				}
+			}
+			if len(runProof.Events) > len(prior) {
+				runPrefixes[runProof.Run.ID] = runProof.Events
+			}
+		} else {
+			runPrefixes[runProof.Run.ID] = runProof.Events
+		}
 	}
 	return verification
+}
+
+func evidenceWithinAnchor(refs []EvidenceRef, eventIDs map[string]struct{}) bool {
+	for _, ref := range refs {
+		if _, exists := eventIDs[ref.EventID]; !exists {
+			return false
+		}
+	}
+	return true
 }
 
 func hashText(value string) string {

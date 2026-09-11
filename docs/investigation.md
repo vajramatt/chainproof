@@ -34,10 +34,11 @@ the next event or checkpoint then appends and verifies normally.
 
 Markdown is useful as generated mission context or human-readable summary, but
 is not suitable as canonical coordination state: parsing is ambiguous, atomic
-multi-agent updates are difficult, and schema evolution is fragile. Roadmap
-work will add first-class portable mission workspaces built from structured
-proof records, with optional generated Markdown views and SQLite rebuild/import
-paths.
+multi-agent updates are difficult, and schema evolution is fragile. Current
+`main` can verify and atomically import continuity JSON into another SQLite
+instance while rebuilding search rows. Roadmap work will add first-class
+portable mission workspaces with artifact files, manifests, JSONL projections,
+and optional generated Markdown views.
 
 ## Indexed evidence
 

@@ -111,6 +111,7 @@ test -x "$binary"
 stage=bootstrap
 "$binary" capabilities --json >"$test_root/capabilities.json"
 grep -F '"product": "chainproof"' "$test_root/capabilities.json" >/dev/null
+grep -F '"mission_import"' "$test_root/capabilities.json" >/dev/null
 if [ -e "$HOME/.chainproof" ]; then
   echo "capability discovery created local state" >&2
   exit 1
@@ -148,6 +149,18 @@ grep -F '"valid": true' "$test_root/verify.json" >/dev/null
 "$binary" mission export "$mission_id" "$test_root/mission-proof.json"
 "$binary" verify-continuity-file "$test_root/mission-proof.json" >"$test_root/verify-continuity.json"
 grep -F '"valid": true' "$test_root/verify-continuity.json" >/dev/null
+CHAINPROOF_DB="$test_root/imported/chainproof.db" \
+CHAINPROOF_AGENT_HOME="$test_root/imported/agents" \
+  "$binary" mission import "$test_root/mission-proof.json" >"$test_root/mission-import.json"
+grep -F '"status": "imported"' "$test_root/mission-import.json" >/dev/null
+CHAINPROOF_DB="$test_root/imported/chainproof.db" \
+CHAINPROOF_AGENT_HOME="$test_root/imported/agents" \
+  "$binary" resume "$mission_id" >"$test_root/imported-resume.json"
+grep -F '"valid": true' "$test_root/imported-resume.json" >/dev/null
+if [ -e "$test_root/imported/agents" ]; then
+  echo "mission import created or copied private identity state" >&2
+  exit 1
+fi
 
 stage=backup_restore
 "$binary" backup "$test_root/backup" >"$test_root/backup.json"

@@ -87,6 +87,75 @@ func TestVerifyBundleDetectsTamperedAnchoredRun(t *testing.T) {
 	}
 }
 
+func TestVerifyBundleRejectsForkedProofsForSameRun(t *testing.T) {
+	at := time.Date(2026, 9, 10, 16, 0, 0, 0, time.UTC)
+	makeEvent := func(id, choice string) proof.Event {
+		event := proof.Event{
+			SchemaVersion: "1", ID: id, RunID: "run-1", PreviousHash: proof.GenesisHash,
+			Timestamp: at, Kind: "decision", Actor: proof.Actor{Type: "agent", Name: "builder"},
+			Source: proof.Source{Adapter: "test", Mode: "reported"}, Payload: map[string]any{"choice": choice},
+			Artifacts: []any{}, Extensions: map[string]any{},
+		}
+		hash, err := proof.Hash(event)
+		if err != nil {
+			t.Fatal(err)
+		}
+		event.EventHash = hash
+		return event
+	}
+	first := makeEvent("event-1", "left")
+	fork := makeEvent("event-2", "right")
+	mission := Mission{ID: "mission-1", Agent: "builder", Objective: "Reject run forks", Status: "active", CreatedAt: at, UpdatedAt: at, ChainHead: GenesisHash, Metadata: map[string]any{}}
+	checkpointOne, err := NewCheckpoint(mission, 0, GenesisHash, at, CheckpointInput{Run: RunAnchor{RunID: "run-1", EntryCount: 1, ChainHead: first.EventHash}, Summary: "First fork"})
+	if err != nil {
+		t.Fatal(err)
+	}
+	checkpointTwo, err := NewCheckpoint(mission, 1, checkpointOne.CheckpointHash, at.Add(time.Second), CheckpointInput{Run: RunAnchor{RunID: "run-1", EntryCount: 1, ChainHead: fork.EventHash}, Summary: "Conflicting fork"})
+	if err != nil {
+		t.Fatal(err)
+	}
+	mission.CheckpointCount = 2
+	mission.ChainHead = checkpointTwo.CheckpointHash
+	bundle := Bundle{
+		Format: "chainproof.continuity.bundle.v1", Mission: mission,
+		Checkpoints: []Checkpoint{checkpointOne, checkpointTwo},
+		RunProofs: []proof.Bundle{
+			{Format: "chainproof.bundle.v1", Run: proof.Run{ID: "run-1", Agent: "builder", Status: "idle", StartedAt: at, EntryCount: 1, ChainHead: first.EventHash, Metadata: map[string]any{}}, Events: []proof.Event{first}},
+			{Format: "chainproof.bundle.v1", Run: proof.Run{ID: "run-1", Agent: "builder", Status: "idle", StartedAt: at, EntryCount: 1, ChainHead: fork.EventHash, Metadata: map[string]any{}}, Events: []proof.Event{fork}},
+		},
+	}
+	if got := VerifyBundle(bundle); got.Valid || got.Reason != "run_proof_fork" {
+		t.Fatalf("forked proofs for one run were accepted: %+v", got)
+	}
+}
+
+func TestVerifyBundleRejectsEvidenceOutsideAnchoredRun(t *testing.T) {
+	at := time.Date(2026, 9, 10, 17, 0, 0, 0, time.UTC)
+	event := proof.Event{
+		SchemaVersion: "1", ID: "event-1", RunID: "run-1", PreviousHash: proof.GenesisHash,
+		Timestamp: at, Kind: "decision", Actor: proof.Actor{Type: "agent", Name: "builder"},
+		Source: proof.Source{Adapter: "test", Mode: "reported"}, Payload: map[string]any{"choice": "continue"},
+		Artifacts: []any{}, Extensions: map[string]any{},
+	}
+	event.EventHash, _ = proof.Hash(event)
+	run := proof.Run{ID: "run-1", Agent: "builder", Status: "idle", StartedAt: at, EntryCount: 1, ChainHead: event.EventHash, Metadata: map[string]any{}}
+	mission := Mission{ID: "mission-1", Agent: "builder", Objective: "Bind evidence", Status: "active", CreatedAt: at, UpdatedAt: at, ChainHead: GenesisHash, Metadata: map[string]any{}}
+	checkpoint, err := NewCheckpoint(mission, 0, GenesisHash, at, CheckpointInput{
+		Run:      RunAnchor{RunID: run.ID, EntryCount: 1, ChainHead: event.EventHash},
+		Summary:  "Claims missing evidence",
+		Evidence: []EvidenceRef{{EventID: "event-outside-prefix"}},
+	})
+	if err != nil {
+		t.Fatal(err)
+	}
+	mission.CheckpointCount = 1
+	mission.ChainHead = checkpoint.CheckpointHash
+	bundle := Bundle{Format: "chainproof.continuity.bundle.v1", Mission: mission, Checkpoints: []Checkpoint{checkpoint}, RunProofs: []proof.Bundle{{Format: "chainproof.bundle.v1", Run: run, Events: []proof.Event{event}}}}
+	if got := VerifyBundle(bundle); got.Valid || got.Reason != "evidence_anchor_invalid" {
+		t.Fatalf("evidence outside anchored run was accepted: %+v", got)
+	}
+}
+
 func TestNewCheckpointMarksResumableStateAsReported(t *testing.T) {
 	mission := Mission{ID: "mission-1", Agent: "builder", Objective: "Ship continuity"}
 	checkpoint, err := NewCheckpoint(mission, 0, GenesisHash, time.Now(), CheckpointInput{

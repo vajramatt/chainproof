@@ -30,9 +30,9 @@ Top-level fields:
 - `protocols`: exact provenance, continuity, Agent Work, and identity format IDs
 - `features`: sorted identifiers for behavior compiled into this binary
 
-Capability output never claims planned behavior. In particular, signed
-attestations, key recovery, portable mission import, and multi-host
-coordination are absent until implemented.
+Capability output never claims planned behavior. Current `main` advertises
+`mission_import`; signed attestations, key recovery, filesystem mission
+workspaces, and multi-host coordination remain absent until implemented.
 
 ## Initialize state
 
@@ -125,8 +125,12 @@ Stable exit classes:
 - `1`, `backup_invalid`: backup manifest, file hashes, ledger, or identities
   failed verification
 - `1`, `destination_exists`: backup or restore refused to overwrite a path
+- `1`, `mission_import_collision`: imported mission, run, event, or checkpoint
+  ID already exists; destination remains unchanged
 - `2`, `usage`: arguments or command name are invalid
 - `3`, `verification_failed`: proof verification rejected input
+- `3`, `mission_import_invalid`: continuity import failed format, chain, run
+  prefix, or record validation before mutation
 
 Flag parsing is quiet, so structured stderr is never prefixed by parser prose.
 Unknown commands are rejected before database or identity initialization.
@@ -145,6 +149,15 @@ only manifest-declared files and refuses any existing destination. Returned
 `ledger` and `agent_home` fields can be assigned to `CHAINPROOF_DB` and
 `CHAINPROOF_AGENT_HOME`; restore never switches or overwrites the running
 instance automatically.
+
+## Import verified mission continuity
+
+`chainproof mission import PROOF.json` verifies a
+`chainproof.continuity.bundle.v1` document, rejects conflicting proofs for same
+run, then inserts canonical mission, checkpoint, run, and event records in one
+transaction. Search rows are rebuilt as derived state. Import preserves source
+mission status and imports no lease, profile, private key, or artifact body.
+Every destination identifier must be unused; any collision aborts whole import.
 
 ## Keep configured state across login
 

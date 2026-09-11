@@ -58,6 +58,8 @@ Current `main` contains the agent-first continuity loop:
 - explicit review of interrupted, uncheckpointed work through recovery acceptance or rejection
 - terminal completion that refuses unresolved recovery tails and prevents later appends
 - portable continuity proofs covering checkpoint history and every anchored run prefix
+- atomic import of verified continuity proofs into a different local instance,
+  preserving canonical IDs and hashes while rebuilding derived search state
 - mission, checkpoint, lease, context, and recovery access through the CLI, localhost API,
   TUI, and embedded read-only web explorer where appropriate
 - side-effect-free `capabilities --json` and `doctor --json` discovery plus
@@ -127,11 +129,12 @@ explorer, and loopback API. Broader unattended use needs these release gates:
    side-effect-free discovery, first-run profile creation, mission and proof
    flow, backup/restore, TUI startup, loopback web exploration, and isolated
    native service setup/status/removal with ledger and identity preservation.
-4. **Portable mission rehydration.** Extend continuity export with import and
-   rebuild paths for structured JSON/JSONL records, artifacts, verification
-   manifests, and generated Markdown summaries. Another ChainProof instance
-   must be able to verify and resume transferred work without trusting the
-   source database.
+4. **Portable mission rehydration.** Current `main` verifies and atomically
+   imports a continuity JSON bundle, rebuilds canonical runs, events,
+   checkpoints, and derived search rows, then resumes and extends the mission
+   without trusting the source database. Filesystem workspaces containing
+   artifacts, verification manifests, JSONL projections, and generated
+   Markdown summaries remain next work.
 5. **Integration packaging.** Ship agent-readable setup and lifecycle guidance
    for Codex, Claude Code, OpenClaw, and generic harnesses. Each integration
    must preserve provenance mode and same local trust boundary.
@@ -473,6 +476,24 @@ chainproof verify-continuity-file continuity-proof.json
 chainproof mission complete MISSION_ID
 ```
 
+Move an active mission into another ChainProof instance:
+
+```sh
+chainproof mission export MISSION_ID continuity-proof.json
+CHAINPROOF_DB=/path/to/other/chainproof.db \
+  chainproof mission import continuity-proof.json
+CHAINPROOF_DB=/path/to/other/chainproof.db \
+  chainproof resume MISSION_ID
+```
+
+Import verifies full checkpoint chain, every anchored run proof, and consistent
+prefixes when several checkpoints cite same run before starting one SQLite
+transaction. It preserves canonical mission, checkpoint, run, and event IDs and
+hashes; rebuilds search rows; imports no leases, private keys, or artifact
+bodies; and refuses any destination ID collision without partial writes. Source
+and destination must not continue same active mission independently because v1
+has no multi-host coordination.
+
 Completion is terminal local control state. ChainProof refuses completion while
 any associated run has uncheckpointed events; accept or reject every recovery
 tail first. Once completed, associated runs reject new appends so later work
@@ -739,6 +760,7 @@ It does not edit the repositories or harness histories it observes.
 | `chainproof mission acquire` | atomically claim available work with verified context |
 | `chainproof mission complete` | close a mission after a valid checkpoint |
 | `chainproof mission export` | export checkpoints and anchored run proofs |
+| `chainproof mission import` | verify and atomically rebuild a portable mission proof |
 | `chainproof mission claim` | atomically acquire an expiring mission lease |
 | `chainproof mission lease` | inspect active ownership and coordination history |
 | `chainproof mission renew` | extend a lease using its current token |

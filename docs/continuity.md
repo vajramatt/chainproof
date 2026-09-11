@@ -280,6 +280,34 @@ The portable bundle contains every checkpoint plus the exact provenance run
 prefix anchored by each checkpoint. Verification needs no database or hosted
 ChainProof service.
 
+When multiple checkpoints anchor same run, verifier requires every overlapping
+event prefix to match. Two independently valid forks carrying same `run_id`
+invalidate whole continuity bundle.
+Checkpoint and commitment evidence must also resolve inside corresponding
+bundled run prefix.
+
+## Import and resume elsewhere
+
+```sh
+CHAINPROOF_DB=/path/to/destination/chainproof.db \
+  chainproof mission import continuity-proof.json
+CHAINPROOF_DB=/path/to/destination/chainproof.db \
+  chainproof resume MISSION_ID
+```
+
+Import performs complete offline verification and record validation before one
+SQLite transaction. It preserves canonical mission, checkpoint, run, and event
+IDs, timestamps, hashes, provenance modes, and source lifecycle status. Repeated
+run prefixes are stored once at longest anchored prefix, and provenance search
+rows are rebuilt from canonical imported events.
+
+Destination must not already contain any imported mission, run, event, or
+checkpoint ID. Collision aborts without partial state; import never merges or
+overwrites. Leases and lease history are local coordination state and are not
+imported. Agent profiles, private keys, and artifact bodies are also outside
+continuity bundle v1. Source and destination must not continue same active
+mission concurrently because v1 has no cross-host ownership protocol.
+
 ## Complete the mission
 
 ```sh

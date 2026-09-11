@@ -57,6 +57,8 @@ func TestStructuredCommandErrorContract(t *testing.T) {
 		{name: "incomplete identity", err: fmt.Errorf("%w: private key is missing", identity.ErrIncomplete), wantCode: "identity_incomplete", wantExit: 1},
 		{name: "invalid backup", err: fmt.Errorf("%w: checksum mismatch", backupstore.ErrInvalid), wantCode: "backup_invalid", wantExit: 1},
 		{name: "destination exists", err: fmt.Errorf("%w: path", backupstore.ErrDestinationExists), wantCode: "destination_exists", wantExit: 1},
+		{name: "invalid mission import", err: fmt.Errorf("%w: bad checkpoint", store.ErrInvalidMissionImport), wantCode: "mission_import_invalid", wantExit: 3},
+		{name: "mission import collision", err: fmt.Errorf("%w: mission exists", store.ErrMissionImportCollision), wantCode: "mission_import_collision", wantExit: 1},
 		{name: "command", err: errors.New("database is locked"), wantCode: "command_failed", wantExit: 1},
 	}
 	for _, tt := range tests {
@@ -187,7 +189,7 @@ func TestCapabilitiesJSONDescribesCurrentBuild(t *testing.T) {
 	if capabilities.Protocols["provenance"] != "chainproof.bundle.v1" || capabilities.Protocols["continuity"] != "chainproof.continuity.bundle.v1" || capabilities.Protocols["agent_work"] != "chainproof.agent-work.v1" || capabilities.Protocols["agent_identity"] != "chainproof.agent.v1" {
 		t.Fatalf("unexpected capability protocols: %s", capabilitiesJSON)
 	}
-	wantFeatures := []string{"agent_identity", "artifact_store", "codex_collector", "codex_work", "continuity_proofs", "independent_process_coordination", "instance_backup_restore", "integration_pull", "integration_push", "local_api", "machine_readable_doctor", "machine_readable_init", "mission_leases", "mission_recovery", "missions", "process_wrap", "provenance_proofs", "search", "stable_exit_codes", "structured_errors", "tui", "web_explorer"}
+	wantFeatures := []string{"agent_identity", "artifact_store", "codex_collector", "codex_work", "continuity_proofs", "independent_process_coordination", "instance_backup_restore", "integration_pull", "integration_push", "local_api", "machine_readable_doctor", "machine_readable_init", "mission_import", "mission_leases", "mission_recovery", "missions", "process_wrap", "provenance_proofs", "search", "stable_exit_codes", "structured_errors", "tui", "web_explorer"}
 	if !reflect.DeepEqual(capabilities.Features, wantFeatures) {
 		t.Fatalf("features = %v, want %v", capabilities.Features, wantFeatures)
 	}
@@ -577,6 +579,74 @@ func TestMissionCLIStartsCheckpointsAndResumes(t *testing.T) {
 	}
 	if mission.Status != "completed" {
 		t.Fatalf("mission not completed: %+v", mission)
+	}
+}
+
+func TestMissionCLIImportsVerifiedPortableProof(t *testing.T) {
+	ctx := context.Background()
+	source, err := store.Open(filepath.Join(t.TempDir(), "source.db"))
+	if err != nil {
+		t.Fatal(err)
+	}
+	mission, err := source.StartMission(ctx, continuity.MissionInput{Agent: "builder", Objective: "Transfer mission"})
+	if err != nil {
+		t.Fatal(err)
+	}
+	agentRun, err := source.Start(ctx, "builder", "test", "gpt-test", map[string]any{"mission_id": mission.ID})
+	if err != nil {
+		t.Fatal(err)
+	}
+	event, err := source.Append(ctx, agentRun.ID, proof.EventInput{Kind: "decision", Source: proof.Source{Adapter: "test", Mode: "reported"}})
+	if err != nil {
+		t.Fatal(err)
+	}
+	if _, err = source.CreateCheckpoint(ctx, mission.ID, agentRun.ID, continuity.CheckpointInput{Summary: "Ready elsewhere", Evidence: []continuity.EvidenceRef{{EventID: event.ID}}}); err != nil {
+		t.Fatal(err)
+	}
+	bundle, err := source.MissionBundle(ctx, mission.ID)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if err = source.Close(); err != nil {
+		t.Fatal(err)
+	}
+	raw, err := json.Marshal(bundle)
+	if err != nil {
+		t.Fatal(err)
+	}
+	proofPath := filepath.Join(t.TempDir(), "mission.json")
+	if err = os.WriteFile(proofPath, raw, 0600); err != nil {
+		t.Fatal(err)
+	}
+	t.Setenv("CHAINPROOF_DB", filepath.Join(t.TempDir(), "destination.db"))
+	t.Setenv("CHAINPROOF_CODEX_DISABLED", "1")
+	outputJSON := captureStdout(t, func() error {
+		return run([]string{"mission", "import", proofPath})
+	})
+	var result struct {
+		SchemaVersion       string             `json:"schema_version"`
+		Status              string             `json:"status"`
+		Mission             continuity.Mission `json:"mission"`
+		RunsImported        int                `json:"runs_imported"`
+		EventsImported      int                `json:"events_imported"`
+		CheckpointsImported int                `json:"checkpoints_imported"`
+	}
+	if err = json.Unmarshal([]byte(outputJSON), &result); err != nil {
+		t.Fatal(err)
+	}
+	if result.SchemaVersion != "1" || result.Status != "imported" || result.Mission.ID != mission.ID || result.RunsImported != 1 || result.EventsImported != 1 || result.CheckpointsImported != 1 {
+		t.Fatalf("unexpected mission import output: %s", outputJSON)
+	}
+	resumedJSON := captureStdout(t, func() error { return run([]string{"resume", mission.ID}) })
+	var resumed continuity.Resume
+	if err = json.Unmarshal([]byte(resumedJSON), &resumed); err != nil {
+		t.Fatal(err)
+	}
+	if !resumed.Verification.Valid || resumed.Checkpoint == nil || resumed.Checkpoint.Summary != "Ready elsewhere" {
+		t.Fatalf("CLI import did not rebuild resumable state: %+v", resumed)
+	}
+	if err = run([]string{"mission", "import", proofPath}); !errors.Is(err, store.ErrMissionImportCollision) {
+		t.Fatalf("duplicate CLI import error = %v", err)
 	}
 }
 
