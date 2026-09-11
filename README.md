@@ -62,6 +62,9 @@ Current `main` contains the agent-first continuity loop:
   TUI, and embedded read-only web explorer where appropriate
 - side-effect-free `capabilities --json` and `doctor --json` discovery plus
   idempotent `init --json` state and identity bootstrap on current `main`
+- release-shaped clean-install lifecycle checks on hosted macOS and Linux,
+  covering bootstrap, proof flow, backup/restore, TUI, loopback web, and
+  service setup/removal without deleting state
 
 Current release line is `v0.6.0`. Source builds from `main` include these
 capabilities too.
@@ -69,7 +72,7 @@ capabilities too.
 Next work deepens the same local-first architecture rather than adding a hosted
 control plane:
 
-- release and installation hardening for the agent-first build
+- packaging the agent-first build into the next release
 - agent-native discovery, bootstrap, initialization, and self-service
 - richer native integrations beyond Codex
 - first-class portable mission workspaces using structured proof records and
@@ -118,10 +121,12 @@ explorer, and loopback API. Broader unattended use needs these release gates:
    identity file going missing without silent replacement. Installer tests
    cover atomic executable upgrades, state preservation, and checksum-failure
    rollback. Current `main` also tests consistent full-instance backup and
-   non-destructive restore. Clean-install validation remains.
-3. **Clean-install verification.** Exercise release archives, checksums,
-   installer, first-run profile creation, service setup, TUI, loopback web
-   explorer, and uninstall behavior on clean supported macOS and Linux systems.
+   non-destructive restore.
+3. **Clean-install verification.** Current `main` passes a release-shaped
+   lifecycle on hosted macOS and Linux: archive and checksum installation,
+   side-effect-free discovery, first-run profile creation, mission and proof
+   flow, backup/restore, TUI startup, loopback web exploration, and isolated
+   native service setup/status/removal with ledger and identity preservation.
 4. **Portable mission rehydration.** Extend continuity export with import and
    rebuild paths for structured JSON/JSONL records, artifacts, verification
    manifests, and generated Markdown summaries. Another ChainProof instance
@@ -137,8 +142,10 @@ Target autonomous lifecycle:
 discover → identify → inspect → acquire → work → checkpoint → verify → handoff
 ```
 
-Next release should package current identity work only after machine-readable
-bootstrap, multi-process and crash tests, and clean-install validation pass.
+Current `main` has passed machine-readable bootstrap, multi-process and crash
+tests, and clean-install validation. Next release work can package these
+capabilities while portable mission rehydration and integration packaging
+continue.
 Signed attestations, key recovery, and private multi-host coordination follow;
 they are not prerequisites for local cooperative use. Publicly exposing the
 unauthenticated loopback service is not part of this path.
