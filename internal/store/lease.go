@@ -86,6 +86,21 @@ func isLeaseContention(err error) bool {
 	return isSQLiteUniqueConstraint(err, "mission_lease_events.mission_id, mission_lease_events.sequence")
 }
 
+func retryMissionLeaseWrite(ctx context.Context, operation string, write func() (continuity.MissionLease, error)) (continuity.MissionLease, error) {
+	var lastErr error
+	for attempt := 0; attempt < maxWriteAttempts; attempt++ {
+		lease, err := write()
+		if err == nil || !isLeaseContention(err) {
+			return lease, err
+		}
+		lastErr = err
+		if err = waitForWriteRetry(ctx, attempt); err != nil {
+			return continuity.MissionLease{}, err
+		}
+	}
+	return continuity.MissionLease{}, fmt.Errorf("%s contention retries exhausted: %w", operation, lastErr)
+}
+
 func (s *Store) AcquireMission(ctx context.Context, input continuity.LeaseInput, maxEvidence int) (continuity.MissionAcquisition, error) {
 	holder, ttl, err := validatedLeaseInput(input)
 	if err != nil {
@@ -258,6 +273,12 @@ func (s *Store) HandoffMission(ctx context.Context, missionID, leaseID string, i
 	if ttl < time.Second || ttl > maxLeaseTTL {
 		return continuity.MissionLease{}, errors.New("lease TTL must be between 1s and 24h")
 	}
+	return retryMissionLeaseWrite(ctx, "mission handoff", func() (continuity.MissionLease, error) {
+		return s.handoffMissionOnce(ctx, missionID, leaseID, holder, ttl)
+	})
+}
+
+func (s *Store) handoffMissionOnce(ctx context.Context, missionID, leaseID, holder string, ttl time.Duration) (continuity.MissionLease, error) {
 	tx, err := s.db.BeginTx(ctx, nil)
 	if err != nil {
 		return continuity.MissionLease{}, err
@@ -292,6 +313,12 @@ func (s *Store) HandoffMission(ctx context.Context, missionID, leaseID string, i
 }
 
 func (s *Store) ReleaseMission(ctx context.Context, missionID, leaseID string) (continuity.MissionLease, error) {
+	return retryMissionLeaseWrite(ctx, "mission release", func() (continuity.MissionLease, error) {
+		return s.releaseMissionOnce(ctx, missionID, leaseID)
+	})
+}
+
+func (s *Store) releaseMissionOnce(ctx context.Context, missionID, leaseID string) (continuity.MissionLease, error) {
 	tx, err := s.db.BeginTx(ctx, nil)
 	if err != nil {
 		return continuity.MissionLease{}, err
@@ -332,6 +359,12 @@ func (s *Store) RenewMission(ctx context.Context, missionID, leaseID string, ttl
 	if ttl < time.Second || ttl > maxLeaseTTL {
 		return continuity.MissionLease{}, errors.New("lease TTL must be between 1s and 24h")
 	}
+	return retryMissionLeaseWrite(ctx, "mission renewal", func() (continuity.MissionLease, error) {
+		return s.renewMissionOnce(ctx, missionID, leaseID, ttl)
+	})
+}
+
+func (s *Store) renewMissionOnce(ctx context.Context, missionID, leaseID string, ttl time.Duration) (continuity.MissionLease, error) {
 	tx, err := s.db.BeginTx(ctx, nil)
 	if err != nil {
 		return continuity.MissionLease{}, err

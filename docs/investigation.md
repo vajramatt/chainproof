@@ -24,10 +24,12 @@ require original database or running ChainProof instance.
 
 Current `main` exercises that claim with independent OS processes, not only
 goroutines. Concurrent appenders retry full transactions and retain every event
-in one valid chain. Concurrent mission claims and queue acquisitions produce one
-winner; contenders retry from fresh state and receive semantic ownership or
-queue results. A forced process kill with an uncommitted event is rolled back by
-SQLite WAL recovery, after which new events append and verify normally.
+in one valid chain. Concurrent mission claims, queue acquisitions, handoffs,
+renewals, and releases retry from fresh state and return semantic ownership or
+queue results; lease history remains serialized. Concurrent recovery of an
+expired lease produces one new owner linked to the abandoned lease. A forced
+process kill with an uncommitted event is rolled back by SQLite WAL recovery,
+after which new events append and verify normally.
 
 Markdown is useful as generated mission context or human-readable summary, but
 is not suitable as canonical coordination state: parsing is ambiguous, atomic

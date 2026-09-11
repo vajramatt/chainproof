@@ -140,6 +140,205 @@ func TestConcurrentMissionClaimsAcrossProcessesHaveOneSemanticWinner(t *testing.
 	}
 }
 
+func TestConcurrentMissionHandoffsAcrossProcessesHaveOneSemanticWinner(t *testing.T) {
+	root := t.TempDir()
+	database := filepath.Join(root, "chainproof.db")
+	store, err := Open(database)
+	if err != nil {
+		t.Fatal(err)
+	}
+	mission, err := store.StartMission(context.Background(), continuity.MissionInput{Agent: "process-test", Objective: "Handoff once"})
+	if err != nil {
+		t.Fatal(err)
+	}
+	lease, err := store.ClaimMission(context.Background(), mission.ID, continuity.LeaseInput{Holder: "agent-a", TTL: time.Minute})
+	if err != nil {
+		t.Fatal(err)
+	}
+	if err = store.Close(); err != nil {
+		t.Fatal(err)
+	}
+
+	const processCount = 8
+	gate := filepath.Join(root, "start")
+	commands := make([]*exec.Cmd, 0, processCount)
+	outputs := make([]strings.Builder, processCount)
+	for index := 0; index < processCount; index++ {
+		ready := filepath.Join(root, fmt.Sprintf("ready-%d", index))
+		handoff := lease.LeaseID + "|agent-" + strconv.Itoa(index)
+		command := exec.Command(os.Args[0], "-test.run=^TestStoreProcessHelper$", "--", "handoff", database, mission.ID, gate, ready, handoff)
+		command.Env = append(os.Environ(), "CHAINPROOF_STORE_PROCESS_HELPER=1")
+		command.Stdout = &outputs[index]
+		command.Stderr = &outputs[index]
+		if err = command.Start(); err != nil {
+			t.Fatal(err)
+		}
+		commands = append(commands, command)
+	}
+	waitForProcessFiles(t, root, "ready-", processCount)
+	if err = os.WriteFile(gate, []byte("go"), 0600); err != nil {
+		t.Fatal(err)
+	}
+	winners := 0
+	for index, command := range commands {
+		err = command.Wait()
+		if err == nil {
+			winners++
+			continue
+		}
+		if !strings.Contains(outputs[index].String(), "lease token does not own mission") {
+			t.Errorf("process %d returned raw contention instead of ownership result: %v\n%s", index, err, outputs[index].String())
+		}
+	}
+	if winners != 1 {
+		t.Fatalf("handoff winners = %d, want 1", winners)
+	}
+}
+
+func TestConcurrentMissionReleasesAcrossProcessesHaveOneSemanticWinner(t *testing.T) {
+	root := t.TempDir()
+	database := filepath.Join(root, "chainproof.db")
+	store, err := Open(database)
+	if err != nil {
+		t.Fatal(err)
+	}
+	mission, err := store.StartMission(context.Background(), continuity.MissionInput{Agent: "process-test", Objective: "Release once"})
+	if err != nil {
+		t.Fatal(err)
+	}
+	lease, err := store.ClaimMission(context.Background(), mission.ID, continuity.LeaseInput{Holder: "agent-a", TTL: time.Minute})
+	if err != nil {
+		t.Fatal(err)
+	}
+	if err = store.Close(); err != nil {
+		t.Fatal(err)
+	}
+
+	values := make([]string, 8)
+	for index := range values {
+		values[index] = lease.LeaseID
+	}
+	results := contendStoreProcesses(t, root, "release", database, mission.ID, values)
+	winners := 0
+	for index, result := range results {
+		if result.err == nil {
+			winners++
+			continue
+		}
+		if !strings.Contains(result.output, "mission has no active lease") {
+			t.Errorf("process %d returned raw contention instead of released result: %v\n%s", index, result.err, result.output)
+		}
+	}
+	if winners != 1 {
+		t.Fatalf("release winners = %d, want 1", winners)
+	}
+}
+
+func TestConcurrentMissionRenewalsAcrossProcessesRemainSerialized(t *testing.T) {
+	root := t.TempDir()
+	database := filepath.Join(root, "chainproof.db")
+	store, err := Open(database)
+	if err != nil {
+		t.Fatal(err)
+	}
+	mission, err := store.StartMission(context.Background(), continuity.MissionInput{Agent: "process-test", Objective: "Renew safely"})
+	if err != nil {
+		t.Fatal(err)
+	}
+	lease, err := store.ClaimMission(context.Background(), mission.ID, continuity.LeaseInput{Holder: "agent-a", TTL: time.Minute})
+	if err != nil {
+		t.Fatal(err)
+	}
+	if err = store.Close(); err != nil {
+		t.Fatal(err)
+	}
+
+	values := make([]string, 8)
+	for index := range values {
+		values[index] = lease.LeaseID
+	}
+	for index, result := range contendStoreProcesses(t, root, "renew", database, mission.ID, values) {
+		if result.err != nil {
+			t.Errorf("renewal process %d failed: %v\n%s", index, result.err, result.output)
+		}
+	}
+	if t.Failed() {
+		return
+	}
+	store, err = Open(database)
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer store.Close()
+	history, err := store.MissionLeaseHistory(context.Background(), mission.ID)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if len(history) != len(values)+1 {
+		t.Fatalf("lease history length = %d, want %d", len(history), len(values)+1)
+	}
+	for sequence, event := range history {
+		if event.Sequence != sequence || event.LeaseID != lease.LeaseID {
+			t.Fatalf("lease event %d was not serialized: %+v", sequence, event)
+		}
+	}
+}
+
+func TestConcurrentExpiredLeaseRecoveryAcrossProcessesHasOneWinner(t *testing.T) {
+	root := t.TempDir()
+	database := filepath.Join(root, "chainproof.db")
+	store, err := Open(database)
+	if err != nil {
+		t.Fatal(err)
+	}
+	store.leaseNow = func() time.Time { return time.Now().UTC().Add(-2 * time.Minute) }
+	mission, err := store.StartMission(context.Background(), continuity.MissionInput{Agent: "process-test", Objective: "Recover abandoned work"})
+	if err != nil {
+		t.Fatal(err)
+	}
+	expired, err := store.ClaimMission(context.Background(), mission.ID, continuity.LeaseInput{Holder: "dead-worker", TTL: time.Minute})
+	if err != nil {
+		t.Fatal(err)
+	}
+	if err = store.Close(); err != nil {
+		t.Fatal(err)
+	}
+
+	values := make([]string, 8)
+	for index := range values {
+		values[index] = "recovery-agent-" + strconv.Itoa(index)
+	}
+	results := contendStoreProcesses(t, root, "acquire", database, mission.ID, values)
+	winners := 0
+	for index, result := range results {
+		if result.err == nil {
+			winners++
+			continue
+		}
+		if !strings.Contains(result.output, "no available mission") {
+			t.Errorf("process %d returned raw contention instead of queue result: %v\n%s", index, result.err, result.output)
+		}
+	}
+	if winners != 1 {
+		t.Fatalf("expired lease recovery winners = %d, want 1", winners)
+	}
+	if t.Failed() {
+		return
+	}
+	store, err = Open(database)
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer store.Close()
+	history, err := store.MissionLeaseHistory(context.Background(), mission.ID)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if len(history) != 2 || history[1].PreviousLeaseID != expired.LeaseID || history[1].Sequence != 1 {
+		t.Fatalf("expired lease recovery history = %+v", history)
+	}
+}
+
 func TestConcurrentMissionAcquisitionAcrossProcessesHasOneSemanticWinner(t *testing.T) {
 	root := t.TempDir()
 	database := filepath.Join(root, "chainproof.db")
@@ -326,12 +525,54 @@ func TestStoreProcessHelper(t *testing.T) {
 		_, err = store.ClaimMission(ctx, args[2], continuity.LeaseInput{Holder: args[5], TTL: time.Minute})
 	case "acquire":
 		_, err = store.AcquireMission(ctx, continuity.LeaseInput{Holder: args[5], TTL: time.Minute}, 20)
+	case "handoff":
+		parts := strings.SplitN(args[5], "|", 2)
+		if len(parts) != 2 {
+			t.Fatalf("invalid handoff helper argument: %s", args[5])
+		}
+		_, err = store.HandoffMission(ctx, args[2], parts[0], continuity.LeaseInput{Holder: parts[1], TTL: time.Minute})
+	case "release":
+		_, err = store.ReleaseMission(ctx, args[2], args[5])
+	case "renew":
+		_, err = store.RenewMission(ctx, args[2], args[5], time.Minute)
 	default:
 		t.Fatalf("invalid helper operation: %s", args[0])
 	}
 	if err != nil {
 		t.Fatal(err)
 	}
+}
+
+type processResult struct {
+	err    error
+	output string
+}
+
+func contendStoreProcesses(t *testing.T, root, operation, database, target string, values []string) []processResult {
+	t.Helper()
+	gate := filepath.Join(root, "start")
+	commands := make([]*exec.Cmd, 0, len(values))
+	outputs := make([]strings.Builder, len(values))
+	for index, value := range values {
+		ready := filepath.Join(root, fmt.Sprintf("ready-%d", index))
+		command := exec.Command(os.Args[0], "-test.run=^TestStoreProcessHelper$", "--", operation, database, target, gate, ready, value)
+		command.Env = append(os.Environ(), "CHAINPROOF_STORE_PROCESS_HELPER=1")
+		command.Stdout = &outputs[index]
+		command.Stderr = &outputs[index]
+		if err := command.Start(); err != nil {
+			t.Fatal(err)
+		}
+		commands = append(commands, command)
+	}
+	waitForProcessFiles(t, root, "ready-", len(values))
+	if err := os.WriteFile(gate, []byte("go"), 0600); err != nil {
+		t.Fatal(err)
+	}
+	results := make([]processResult, len(values))
+	for index, command := range commands {
+		results[index] = processResult{err: command.Wait(), output: outputs[index].String()}
+	}
+	return results
 }
 
 func waitForProcessFiles(t *testing.T, directory, prefix string, count int) {
