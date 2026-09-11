@@ -1078,7 +1078,11 @@ func manageService(args []string) error {
 		if err != nil {
 			return err
 		}
-		paths, err := service.Install(executable)
+		config, err := configuredService()
+		if err != nil {
+			return err
+		}
+		paths, err := service.Install(executable, config)
 		if err != nil {
 			return err
 		}
@@ -1102,6 +1106,35 @@ func manageService(args []string) error {
 	default:
 		return errors.New("usage: chainproof service install|start|stop|status|uninstall")
 	}
+}
+
+func configuredService() (service.Config, error) {
+	dbPath, err := configuredDBPath()
+	if err != nil {
+		return service.Config{}, err
+	}
+	dbPath, err = filepath.Abs(dbPath)
+	if err != nil {
+		return service.Config{}, err
+	}
+	agentHome, err := filepath.Abs(agentRoot(dbPath))
+	if err != nil {
+		return service.Config{}, err
+	}
+	config := service.Config{
+		Database:      dbPath,
+		AgentHome:     agentHome,
+		AgentProfile:  selectedAgentProfile(),
+		CodexContent:  strings.TrimSpace(os.Getenv("CHAINPROOF_CODEX_CONTENT")),
+		CodexDisabled: strings.TrimSpace(os.Getenv("CHAINPROOF_CODEX_DISABLED")),
+	}
+	if codexRoot := strings.TrimSpace(os.Getenv("CHAINPROOF_CODEX_ROOT")); codexRoot != "" {
+		config.CodexRoot, err = filepath.Abs(codexRoot)
+		if err != nil {
+			return service.Config{}, err
+		}
+	}
+	return config, nil
 }
 
 const usage = `ChainProof — durable continuity and provenance for AI agents

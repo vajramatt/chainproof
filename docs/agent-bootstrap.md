@@ -88,6 +88,24 @@ Until stable exit codes land, consumers must treat JSON `status` and individual
 check statuses as authoritative. Structured error output and stable nonzero exit
 codes remain release gates.
 
+## Keep configured state across login
+
+Current `main` makes `chainproof service install` snapshot resolved local state
+and collector configuration into the macOS LaunchAgent or Linux systemd user
+unit. It persists this fixed allowlist:
+
+- `CHAINPROOF_DB`
+- `CHAINPROOF_AGENT_HOME`
+- `CHAINPROOF_AGENT_PROFILE`
+- `CHAINPROOF_CODEX_ROOT` when configured
+- `CHAINPROOF_CODEX_CONTENT` when configured
+- `CHAINPROOF_CODEX_DISABLED` when configured
+
+State and collector paths become absolute before installation. Daemon output
+goes to `daemon.log` beside configured database. Re-run service installation
+after changing configuration. ChainProof does not copy ambient variables,
+tokens, or credentials into service definition.
+
 ## Security boundary
 
 Machine bootstrap does not add authentication. Local HTTP remains loopback-only

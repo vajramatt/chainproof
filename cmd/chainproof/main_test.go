@@ -17,8 +17,39 @@ import (
 
 	"github.com/vajramatt/chainproof/internal/continuity"
 	"github.com/vajramatt/chainproof/internal/proof"
+	"github.com/vajramatt/chainproof/internal/service"
 	"github.com/vajramatt/chainproof/internal/store"
 )
+
+func TestConfiguredServicePreservesResolvedState(t *testing.T) {
+	root := t.TempDir()
+	dbPath := filepath.Join(root, "state", "chainproof.db")
+	agentHome := filepath.Join(root, "profiles")
+	codexRoot := filepath.Join(root, "codex sessions")
+	t.Setenv("CHAINPROOF_DB", dbPath)
+	t.Setenv("CHAINPROOF_AGENT_HOME", agentHome)
+	t.Setenv("CHAINPROOF_AGENT_PROFILE", "codex-main")
+	t.Setenv("CHAINPROOF_CODEX_ROOT", codexRoot)
+	t.Setenv("CHAINPROOF_CODEX_CONTENT", "full")
+	t.Setenv("CHAINPROOF_CODEX_DISABLED", "1")
+	t.Setenv("CHAINPROOF_API_TOKEN", "must-not-be-captured")
+
+	got, err := configuredService()
+	if err != nil {
+		t.Fatal(err)
+	}
+	want := service.Config{
+		Database:      dbPath,
+		AgentHome:     agentHome,
+		AgentProfile:  "codex-main",
+		CodexRoot:     codexRoot,
+		CodexContent:  "full",
+		CodexDisabled: "1",
+	}
+	if !reflect.DeepEqual(got, want) {
+		t.Fatalf("configuredService() = %+v, want %+v", got, want)
+	}
+}
 
 func TestCapabilitiesJSONDescribesCurrentBuild(t *testing.T) {
 	dbPath := filepath.Join(t.TempDir(), "state", "chainproof.db")

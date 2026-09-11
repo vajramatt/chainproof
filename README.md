@@ -110,8 +110,9 @@ explorer, and loopback API. Broader unattended use needs these release gates:
 2. **Process and failure hardening.** Test independent OS processes sharing one
    database, WAL recovery after forced termination, interrupted checkpoints,
    expired leases, corrupted profiles, lost keys, database upgrades, and
-   backup/restore. Existing goroutine coverage is necessary but not sufficient
-   for autonomous multi-agent operation.
+   backup/restore. Current `main` preserves resolved custom ledger, identity,
+   and collector paths in installed user services. Existing goroutine coverage
+   is necessary but not sufficient for autonomous multi-agent operation.
 3. **Clean-install verification.** Exercise release archives, checksums,
    installer, first-run profile creation, service setup, TUI, loopback web
    explorer, and uninstall behavior on clean supported macOS and Linux systems.
@@ -222,6 +223,13 @@ chainproof service install
 On macOS this creates a private user LaunchAgent; on Linux it creates and
 enables a systemd user service. It starts at login, follows Codex while the TUI
 is closed, owns the localhost API, and keeps the ledger current.
+
+Installation snapshots resolved `CHAINPROOF_DB`, `CHAINPROOF_AGENT_HOME`,
+`CHAINPROOF_AGENT_PROFILE`, and configured Codex collector settings into the
+native service definition. Path values become absolute, and daemon output is
+written beside the configured database. Re-run `chainproof service install`
+after changing these settings. Only this fixed non-secret allowlist is copied;
+other environment variables and credentials are excluded.
 
 ```sh
 chainproof service status

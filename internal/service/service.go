@@ -19,18 +19,33 @@ const launchdLabel = "dev.chainproof.daemon"
 
 type Paths struct{ Config, Log string }
 
-func Install(executable string) (Paths, error) {
+type Config struct {
+	Database      string
+	AgentHome     string
+	AgentProfile  string
+	CodexRoot     string
+	CodexContent  string
+	CodexDisabled string
+}
+
+type environmentVariable struct {
+	Name  string
+	Value string
+}
+
+func Install(executable string, config Config) (Paths, error) {
 	paths, err := PathsFor(runtime.GOOS)
 	if err != nil {
 		return paths, err
 	}
+	paths.Log = LogPath(config, paths.Log)
 	if err = os.MkdirAll(filepath.Dir(paths.Config), 0700); err != nil {
 		return paths, err
 	}
 	if err = os.MkdirAll(filepath.Dir(paths.Log), 0700); err != nil {
 		return paths, err
 	}
-	content, err := Render(runtime.GOOS, executable, paths.Log)
+	content, err := Render(runtime.GOOS, executable, paths.Log, config)
 	if err != nil {
 		return paths, err
 	}
@@ -130,18 +145,29 @@ func PathsFor(goos string) (Paths, error) {
 	}
 	return Paths{}, unsupported()
 }
-func Render(goos, executable, logPath string) (string, error) {
-	data := map[string]string{}
+func Render(goos, executable, logPath string, config Config) (string, error) {
+	type templateData struct {
+		Executable  string
+		Log         string
+		Environment []environmentVariable
+	}
+	data := templateData{}
 	var source string
 	switch goos {
 	case "darwin":
 		source = plistTemplate
-		data["Executable"] = xmlText(executable)
-		data["Log"] = xmlText(logPath)
+		data.Executable = xmlText(executable)
+		data.Log = xmlText(logPath)
+		for _, variable := range config.environment() {
+			data.Environment = append(data.Environment, environmentVariable{Name: xmlText(variable.Name), Value: xmlText(variable.Value)})
+		}
 	case "linux":
 		source = unitTemplate
-		data["Executable"] = strconv.Quote(executable)
-		data["Log"] = strconv.Quote(logPath)
+		data.Executable = systemdQuote(executable)
+		data.Log = systemdQuote(logPath)
+		for _, variable := range config.environment() {
+			data.Environment = append(data.Environment, environmentVariable{Name: variable.Name, Value: systemdQuote(variable.Name + "=" + variable.Value)})
+		}
 	default:
 		return "", unsupported()
 	}
@@ -154,6 +180,35 @@ func Render(goos, executable, logPath string) (string, error) {
 		return "", err
 	}
 	return out.String(), nil
+}
+
+func LogPath(config Config, fallback string) string {
+	if config.Database == "" {
+		return fallback
+	}
+	return filepath.Join(filepath.Dir(config.Database), "daemon.log")
+}
+
+func (config Config) environment() []environmentVariable {
+	values := []environmentVariable{
+		{Name: "CHAINPROOF_DB", Value: config.Database},
+		{Name: "CHAINPROOF_AGENT_HOME", Value: config.AgentHome},
+		{Name: "CHAINPROOF_AGENT_PROFILE", Value: config.AgentProfile},
+		{Name: "CHAINPROOF_CODEX_ROOT", Value: config.CodexRoot},
+		{Name: "CHAINPROOF_CODEX_CONTENT", Value: config.CodexContent},
+		{Name: "CHAINPROOF_CODEX_DISABLED", Value: config.CodexDisabled},
+	}
+	result := make([]environmentVariable, 0, len(values))
+	for _, variable := range values {
+		if variable.Value != "" {
+			result = append(result, variable)
+		}
+	}
+	return result
+}
+
+func systemdQuote(value string) string {
+	return strconv.Quote(strings.ReplaceAll(value, "%", "%%"))
 }
 func run(name string, args ...string) (string, error) {
 	cmd := exec.Command(name, args...)
@@ -184,6 +239,9 @@ const plistTemplate = `<?xml version="1.0" encoding="UTF-8"?>
   <key>ProgramArguments</key><array><string>{{.Executable}}</string><string>daemon</string></array>
   <key>RunAtLoad</key><true/><key>KeepAlive</key><true/>
   <key>ProcessType</key><string>Background</string>
+  <key>EnvironmentVariables</key><dict>{{range .Environment}}
+    <key>{{.Name}}</key><string>{{.Value}}</string>{{end}}
+  </dict>
   <key>StandardOutPath</key><string>{{.Log}}</string>
   <key>StandardErrorPath</key><string>{{.Log}}</string>
 </dict></plist>
@@ -195,7 +253,8 @@ After=default.target
 [Service]
 Type=simple
 ExecStart={{.Executable}} daemon
-Restart=on-failure
+{{range .Environment}}Environment={{.Value}}
+{{end}}Restart=on-failure
 RestartSec=2
 StandardOutput=append:{{.Log}}
 StandardError=append:{{.Log}}

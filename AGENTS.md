@@ -36,6 +36,9 @@ formats, and release artifacts.
 - Keep machine-readable bootstrap idempotent and side-effect boundaries exact:
   capability discovery and diagnostics must not initialize state, while
   initialization must converge on same stable local identity.
+- Make user services preserve resolved ledger, identity, and collector paths
+  across login. Persist only explicit ChainProof configuration; never copy
+  ambient environment variables or credentials into service definitions.
 - Keep local agent profiles owner-only and separate stable `agent_id`, readable
   `display_name`, ephemeral `worker_id`, and mission-specific `role`. Never
   describe unsigned attribution metadata as authentication or signed proof.
