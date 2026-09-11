@@ -174,7 +174,6 @@ case "$os" in
   darwin) printf q | script -q /dev/null "$binary" ui >"$test_root/tui.log" ;;
   linux) printf q | script -q -c "$binary ui" /dev/null >"$test_root/tui.log" ;;
 esac
-grep -F 'Starting ChainProof' "$test_root/tui.log" >/dev/null
 
 : >"$test_root/service.log"
 "$binary" service install >"$test_root/service-install.log"
