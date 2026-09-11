@@ -21,7 +21,10 @@ import (
 	sqlite3 "modernc.org/sqlite/lib"
 )
 
-const maxWriteAttempts = 10
+const (
+	maxWriteAttempts   = 24
+	maxWriteRetryDelay = 100 * time.Millisecond
+)
 
 var errConcurrentAppend = errors.New("concurrent append detected")
 
@@ -252,7 +255,7 @@ func isSQLiteUniqueConstraint(err error, columns string) bool {
 }
 
 func waitForWriteRetry(ctx context.Context, attempt int) error {
-	delay := time.Millisecond << min(attempt, 5)
+	delay := min(time.Millisecond<<min(attempt, 7), maxWriteRetryDelay)
 	timer := time.NewTimer(delay)
 	defer timer.Stop()
 	select {
