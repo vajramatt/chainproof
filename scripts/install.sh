@@ -18,7 +18,12 @@ esac
 
 archive="chainproof_${version}_${os}_${arch}.tar.gz"
 tmp=$(mktemp -d "${TMPDIR:-/tmp}/chainproof.XXXXXX")
-trap 'rm -rf "$tmp"' EXIT INT TERM
+staged=
+cleanup() {
+  rm -rf "$tmp"
+  if [ -n "$staged" ]; then rm -f "$staged"; fi
+}
+trap cleanup EXIT INT TERM
 
 echo "downloading ChainProof $version for $os/$arch"
 curl -fsSL "$repo/releases/download/$version/$archive" -o "$tmp/$archive"
@@ -30,7 +35,10 @@ if [ "$actual" != "$expected" ]; then echo "checksum verification failed" >&2; e
 
 tar -xzf "$tmp/$archive" -C "$tmp"
 mkdir -p "$bindir"
-install -m 0755 "$tmp/${archive%.tar.gz}/chainproof" "$bindir/chainproof"
+staged=$(mktemp "$bindir/.chainproof.install.XXXXXX")
+install -m 0755 "$tmp/${archive%.tar.gz}/chainproof" "$staged"
+mv -f "$staged" "$bindir/chainproof"
+staged=
 
 echo "installed $bindir/chainproof"
 case ":$PATH:" in *":$bindir:"*) ;; *) echo "add $bindir to your PATH" ;; esac

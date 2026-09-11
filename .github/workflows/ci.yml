@@ -22,6 +22,8 @@ jobs:
           cache: true
       - run: go test ./...
       - run: go build -trimpath ./cmd/chainproof
+      - if: runner.os != 'Windows'
+        run: sh scripts/install_test.sh
 
   go-quality:
     runs-on: ubuntu-latest

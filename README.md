@@ -115,8 +115,9 @@ explorer, and loopback API. Broader unattended use needs these release gates:
    recover cleanly after forced termination during an uncommitted event or
    checkpoint. Custom service state also persists across login. Identity
    failure tests cover corrupt profiles, corrupt or mismatched keys, and either
-   identity file going missing without silent replacement. Upgrades and
-   backup/restore still need deeper failure testing.
+   identity file going missing without silent replacement. Installer tests
+   cover atomic executable upgrades, state preservation, and checksum-failure
+   rollback. Backup/restore still needs deeper failure testing.
 3. **Clean-install verification.** Exercise release archives, checksums,
    installer, first-run profile creation, service setup, TUI, loopback web
    explorer, and uninstall behavior on clean supported macOS and Linux systems.
@@ -182,7 +183,9 @@ error, and `3` means proof verification failure. Doctor health remains in its
 JSON `status`; successful diagnosis exits `0` even when state needs attention.
 
 The installer verifies the release archive against its published SHA-256
-checksum. The database opens at `~/.chainproof/chainproof.db`; set
+checksum, stages upgrades beside the installed binary, and atomically replaces
+the executable only after verification. Existing ledger and identity state are
+not changed. The database opens at `~/.chainproof/chainproof.db`; set
 `CHAINPROOF_DB` to put it somewhere else. Local agent profiles live beside the
 database under `agents/`.
 

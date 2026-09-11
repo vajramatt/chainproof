@@ -110,3 +110,8 @@ detects mismatch between downloaded archive and published checksum. It is not
 independent artifact signing and does not protect against compromise able to
 replace both release asset and checksum. Review tag, source, dependencies, and
 release provenance when stronger supply-chain assurance is required.
+
+Verified upgrades are staged in the destination directory and atomically
+renamed over the installed executable. A failed download or checksum leaves the
+previous executable unchanged. Installer upgrades do not modify ledger or
+identity state.
