@@ -24,6 +24,8 @@ jobs:
       - run: go build -trimpath ./cmd/chainproof
       - if: runner.os != 'Windows'
         run: sh scripts/install_test.sh
+      - if: runner.os != 'Windows'
+        run: sh scripts/clean_install_test.sh
 
   go-quality:
     runs-on: ubuntu-latest
