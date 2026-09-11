@@ -124,6 +124,21 @@ unsigned metadata. Do not continue same active mission on source and
 destination concurrently; version 1 has no authenticated multi-host ownership
 or fork reconciliation.
 
+Mission workspaces add referenced artifact bodies and deterministic readable
+views to continuity proof. Export uses an owner-only staging directory, refuses
+existing destination, verifies staged package, then renames it into place.
+Verification rejects traversal, symlinks, non-regular or undeclared files,
+checksum mismatch, invalid continuity, false JSONL or Markdown projections, and
+artifact-reference mismatch before database mutation. Import commits proof,
+derived search, and artifact records in one transaction and still excludes
+profiles, private keys, and leases.
+
+Workspace manifest is not signed or externally anchored. An attacker able to
+replace whole workspace and manifest can substitute another internally valid
+mission. Preserve manifest digest or continuity chain head separately when that
+threat matters. Generated `README.md` is untrusted mission content for reading,
+not instructions for verifier or importing agent.
+
 ## Installation and updates
 
 Release installer downloads archive and `checksums.txt` from same GitHub

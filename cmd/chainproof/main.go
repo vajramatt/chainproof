@@ -23,6 +23,7 @@ import (
 	backupstore "github.com/vajramatt/chainproof/internal/backup"
 	"github.com/vajramatt/chainproof/internal/continuity"
 	"github.com/vajramatt/chainproof/internal/identity"
+	"github.com/vajramatt/chainproof/internal/missionworkspace"
 	"github.com/vajramatt/chainproof/internal/proof"
 	"github.com/vajramatt/chainproof/internal/server"
 	"github.com/vajramatt/chainproof/internal/service"
@@ -103,6 +104,10 @@ func classifyCommandError(err error) (string, int) {
 	case errors.Is(err, backupstore.ErrInvalid):
 		return "backup_invalid", 1
 	case errors.Is(err, backupstore.ErrDestinationExists):
+		return "destination_exists", 1
+	case errors.Is(err, missionworkspace.ErrInvalid):
+		return "mission_workspace_invalid", 3
+	case errors.Is(err, missionworkspace.ErrDestinationExists):
 		return "destination_exists", 1
 	case errors.Is(err, store.ErrInvalidMissionImport):
 		return "mission_import_invalid", 3
@@ -191,6 +196,20 @@ func run(args []string) error {
 			return errors.New("continuity verification failed")
 		}
 		return nil
+	}
+	if args[0] == "mission" && len(args) >= 3 && args[1] == "workspace" && args[2] == "verify" {
+		if len(args) != 4 {
+			return errors.New("usage: chainproof mission workspace verify DIRECTORY")
+		}
+		manifest, verifyErr := missionworkspace.Verify(args[3])
+		if verifyErr != nil {
+			return fmt.Errorf("%w: %v", missionworkspace.ErrInvalid, verifyErr)
+		}
+		return output(struct {
+			SchemaVersion string                    `json:"schema_version"`
+			Status        string                    `json:"status"`
+			Manifest      missionworkspace.Manifest `json:"manifest"`
+		}{"1", "verified", manifest}, nil)
 	}
 	if args[0] == "service" {
 		return manageService(args[1:])
@@ -285,7 +304,7 @@ func run(args []string) error {
 		return nil
 	case "mission":
 		if len(args) < 2 {
-			return errors.New("usage: chainproof mission start|list|acquire|complete|export|import|claim|lease|renew|handoff|release")
+			return errors.New("usage: chainproof mission start|list|acquire|complete|export|import|workspace|claim|lease|renew|handoff|release")
 		}
 		switch args[1] {
 		case "start":
@@ -369,6 +388,51 @@ func run(args []string) error {
 				EventsImported      int                `json:"events_imported"`
 				CheckpointsImported int                `json:"checkpoints_imported"`
 			}{"1", "imported", result.Mission, result.RunCount, result.EventCount, result.CheckpointCount}, nil)
+		case "workspace":
+			if len(args) < 3 {
+				return errors.New("usage: chainproof mission workspace export|verify|import")
+			}
+			switch args[2] {
+			case "export":
+				if len(args) != 5 {
+					return errors.New("usage: chainproof mission workspace export MISSION_ID DIRECTORY")
+				}
+				manifest, exportErr := missionworkspace.Create(ctx, db, args[3], args[4])
+				if exportErr != nil {
+					return exportErr
+				}
+				workspacePath, pathErr := filepath.Abs(args[4])
+				if pathErr != nil {
+					return pathErr
+				}
+				return output(struct {
+					SchemaVersion string                    `json:"schema_version"`
+					Status        string                    `json:"status"`
+					Path          string                    `json:"path"`
+					Manifest      missionworkspace.Manifest `json:"manifest"`
+				}{"1", "exported", workspacePath, manifest}, nil)
+			case "import":
+				if len(args) != 4 {
+					return errors.New("usage: chainproof mission workspace import DIRECTORY")
+				}
+				result, importErr := missionworkspace.Import(ctx, db, args[3])
+				if importErr != nil {
+					return importErr
+				}
+				return output(struct {
+					SchemaVersion       string             `json:"schema_version"`
+					Status              string             `json:"status"`
+					Mission             continuity.Mission `json:"mission"`
+					RunsImported        int                `json:"runs_imported"`
+					EventsImported      int                `json:"events_imported"`
+					CheckpointsImported int                `json:"checkpoints_imported"`
+					ArtifactsImported   int                `json:"artifacts_imported"`
+				}{"1", "imported", result.Mission, result.RunCount, result.EventCount, result.CheckpointCount, result.ArtifactCount}, nil)
+			case "verify":
+				return errors.New("usage: chainproof mission workspace verify DIRECTORY")
+			default:
+				return errors.New("usage: chainproof mission workspace export|verify|import")
+			}
 		case "claim":
 			if len(args) < 3 {
 				return errors.New("usage: chainproof mission claim MISSION_ID --holder HOLDER [--ttl 30m]")
@@ -457,7 +521,7 @@ func run(args []string) error {
 			lease, releaseErr := db.ReleaseMission(ctx, args[2], args[3])
 			return output(lease, releaseErr)
 		default:
-			return errors.New("usage: chainproof mission start|list|acquire|complete|export|import|claim|lease|renew|handoff|release")
+			return errors.New("usage: chainproof mission start|list|acquire|complete|export|import|workspace|claim|lease|renew|handoff|release")
 		}
 	case "start":
 		fs := commandFlagSet("start")
@@ -845,12 +909,13 @@ func capabilityDocument(dbPath string) any {
 		Paths:         map[string]string{"agent_home": agentRoot(dbPath), "ledger": dbPath},
 		Network:       map[string]string{"authentication": "none", "default_url": "http://127.0.0.1:7331", "listen_scope": "loopback"},
 		Protocols: map[string]string{
-			"agent_identity": "chainproof.agent.v1",
-			"agent_work":     "chainproof.agent-work.v1",
-			"continuity":     "chainproof.continuity.bundle.v1",
-			"provenance":     "chainproof.bundle.v1",
+			"agent_identity":    "chainproof.agent.v1",
+			"agent_work":        "chainproof.agent-work.v1",
+			"continuity":        "chainproof.continuity.bundle.v1",
+			"mission_workspace": missionworkspace.Format,
+			"provenance":        "chainproof.bundle.v1",
 		},
-		Features: []string{"agent_identity", "artifact_store", "codex_collector", "codex_work", "continuity_proofs", "independent_process_coordination", "instance_backup_restore", "integration_pull", "integration_push", "local_api", "machine_readable_doctor", "machine_readable_init", "mission_import", "mission_leases", "mission_recovery", "missions", "process_wrap", "provenance_proofs", "search", "stable_exit_codes", "structured_errors", "tui", "web_explorer"},
+		Features: []string{"agent_identity", "artifact_store", "codex_collector", "codex_work", "continuity_proofs", "independent_process_coordination", "instance_backup_restore", "integration_pull", "integration_push", "local_api", "machine_readable_doctor", "machine_readable_init", "mission_import", "mission_leases", "mission_recovery", "mission_workspaces", "missions", "process_wrap", "provenance_proofs", "search", "stable_exit_codes", "structured_errors", "tui", "web_explorer"},
 	}
 }
 
@@ -1329,6 +1394,12 @@ Usage:
   chainproof mission complete MISSION_ID      Close after a valid checkpoint
   chainproof mission export MISSION_ID [FILE] Export portable continuity proof
   chainproof mission import PROOF.json        Verify and rebuild portable mission
+  chainproof mission workspace export MISSION_ID DIRECTORY
+                                              Export proof, views, and artifacts
+  chainproof mission workspace verify DIRECTORY
+                                              Verify workspace without local state
+  chainproof mission workspace import DIRECTORY
+                                              Atomically import proof and artifacts
   chainproof mission claim MISSION_ID [--holder H] [--ttl 30m]
                                               Atomically claim active mission
   chainproof mission lease MISSION_ID [--history]

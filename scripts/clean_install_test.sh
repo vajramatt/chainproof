@@ -112,6 +112,7 @@ stage=bootstrap
 "$binary" capabilities --json >"$test_root/capabilities.json"
 grep -F '"product": "chainproof"' "$test_root/capabilities.json" >/dev/null
 grep -F '"mission_import"' "$test_root/capabilities.json" >/dev/null
+grep -F '"mission_workspaces"' "$test_root/capabilities.json" >/dev/null
 if [ -e "$HOME/.chainproof" ]; then
   echo "capability discovery created local state" >&2
   exit 1
@@ -159,6 +160,27 @@ CHAINPROOF_AGENT_HOME="$test_root/imported/agents" \
 grep -F '"valid": true' "$test_root/imported-resume.json" >/dev/null
 if [ -e "$test_root/imported/agents" ]; then
   echo "mission import created or copied private identity state" >&2
+  exit 1
+fi
+"$binary" mission workspace export "$mission_id" "$test_root/mission-workspace" >"$test_root/workspace-export.json"
+test -f "$test_root/mission-workspace/manifest.json"
+test -f "$test_root/mission-workspace/continuity.json"
+test -f "$test_root/mission-workspace/events.jsonl"
+test -f "$test_root/mission-workspace/README.md"
+CHAINPROOF_DB="$test_root/offline-verify-must-not-exist.db" \
+  "$binary" mission workspace verify "$test_root/mission-workspace" >"$test_root/workspace-verify.json"
+grep -F '"status": "verified"' "$test_root/workspace-verify.json" >/dev/null
+test ! -e "$test_root/offline-verify-must-not-exist.db"
+CHAINPROOF_DB="$test_root/workspace-imported/chainproof.db" \
+CHAINPROOF_AGENT_HOME="$test_root/workspace-imported/agents" \
+  "$binary" mission workspace import "$test_root/mission-workspace" >"$test_root/workspace-import.json"
+grep -F '"status": "imported"' "$test_root/workspace-import.json" >/dev/null
+CHAINPROOF_DB="$test_root/workspace-imported/chainproof.db" \
+CHAINPROOF_AGENT_HOME="$test_root/workspace-imported/agents" \
+  "$binary" resume "$mission_id" >"$test_root/workspace-resume.json"
+grep -F '"valid": true' "$test_root/workspace-resume.json" >/dev/null
+if [ -e "$test_root/workspace-imported/agents" ]; then
+  echo "mission workspace import created or copied private identity state" >&2
   exit 1
 fi
 

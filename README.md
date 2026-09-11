@@ -60,6 +60,9 @@ Current `main` contains the agent-first continuity loop:
 - portable continuity proofs covering checkpoint history and every anchored run prefix
 - atomic import of verified continuity proofs into a different local instance,
   preserving canonical IDs and hashes while rebuilding derived search state
+- verified filesystem mission workspaces containing continuity JSON,
+  deterministic event JSONL and Markdown views, manifest checksums, and
+  referenced content-addressed artifacts
 - mission, checkpoint, lease, context, and recovery access through the CLI, localhost API,
   TUI, and embedded read-only web explorer where appropriate
 - side-effect-free `capabilities --json` and `doctor --json` discovery plus
@@ -75,10 +78,7 @@ Next work deepens the same local-first architecture rather than adding a hosted
 control plane:
 
 - packaging the agent-first build into the next release
-- agent-native discovery, bootstrap, initialization, and self-service
 - richer native integrations beyond Codex
-- first-class portable mission workspaces using structured proof records and
-  generated Markdown views while retaining SQLite for live coordination
 - deeper local web investigation across timelines, diffs, artifacts, failures,
   comparisons, and proof reports
 - durable remote-executor handoff and multi-host lease coordination
@@ -95,10 +95,10 @@ the evidence.
 
 SQLite is the local operational engine: it provides atomic appends,
 transactions, leases, indexes, and safe coordination among local agents.
-Portable structured proof bundles are the interchange boundary and verify
-without SQLite or a ChainProof server. Planned mission workspaces will make
-that boundary easier to carry between machines; Markdown will be a generated
-readable view, not canonical coordination state.
+Portable structured proof bundles and verified mission workspaces are the
+interchange boundary and verify without SQLite or a ChainProof server. Markdown
+and JSONL inside a workspace are deterministic generated views, not canonical
+coordination state.
 
 ## Path to autonomous use
 
@@ -130,11 +130,11 @@ explorer, and loopback API. Broader unattended use needs these release gates:
    flow, backup/restore, TUI startup, loopback web exploration, and isolated
    native service setup/status/removal with ledger and identity preservation.
 4. **Portable mission rehydration.** Current `main` verifies and atomically
-   imports a continuity JSON bundle, rebuilds canonical runs, events,
-   checkpoints, and derived search rows, then resumes and extends the mission
-   without trusting the source database. Filesystem workspaces containing
-   artifacts, verification manifests, JSONL projections, and generated
-   Markdown summaries remain next work.
+   imports continuity JSON or a filesystem mission workspace. Workspace export
+   carries a checksum manifest, canonical proof, deterministic JSONL and
+   Markdown views, and referenced artifact bodies. Import rebuilds mission,
+   run, event, checkpoint, search, and artifact state in one transaction,
+   without trusting source database or copying identity and lease state.
 5. **Integration packaging.** Ship agent-readable setup and lifecycle guidance
    for Codex, Claude Code, OpenClaw, and generic harnesses. Each integration
    must preserve provenance mode and same local trust boundary.
@@ -142,13 +142,13 @@ explorer, and loopback API. Broader unattended use needs these release gates:
 Target autonomous lifecycle:
 
 ```text
-discover → identify → inspect → acquire → work → checkpoint → verify → handoff
+discover → identify → inspect → acquire → work → checkpoint → verify → transfer → resume
 ```
 
 Current `main` has passed machine-readable bootstrap, multi-process and crash
-tests, and clean-install validation. Next release work can package these
-capabilities while portable mission rehydration and integration packaging
-continue.
+tests, clean-install validation, and portable workspace rehydration. Next
+release work can package these capabilities while integration packaging
+continues.
 Signed attestations, key recovery, and private multi-host coordination follow;
 they are not prerequisites for local cooperative use. Publicly exposing the
 unauthenticated loopback service is not part of this path.
@@ -494,6 +494,25 @@ bodies; and refuses any destination ID collision without partial writes. Source
 and destination must not continue same active mission independently because v1
 has no multi-host coordination.
 
+Carry proof, readable views, and referenced artifact bodies as one verified
+filesystem workspace:
+
+```sh
+chainproof mission workspace export MISSION_ID ./mission-workspace
+chainproof mission workspace verify ./mission-workspace
+CHAINPROOF_DB=/path/to/other/chainproof.db \
+  chainproof mission workspace import ./mission-workspace
+CHAINPROOF_DB=/path/to/other/chainproof.db \
+  chainproof resume MISSION_ID
+```
+
+Workspace verification is offline and does not initialize local state. Export
+refuses an existing destination and publishes only after staged files verify.
+Import checks complete inventory, file hashes, continuity, deterministic JSONL
+and Markdown projections, and artifact bodies before atomically rebuilding
+destination state. See
+[`spec/mission-workspace-v1.md`](spec/mission-workspace-v1.md).
+
 Completion is terminal local control state. ChainProof refuses completion while
 any associated run has uncheckpointed events; accept or reject every recovery
 tail first. Once completed, associated runs reject new appends so later work
@@ -761,6 +780,9 @@ It does not edit the repositories or harness histories it observes.
 | `chainproof mission complete` | close a mission after a valid checkpoint |
 | `chainproof mission export` | export checkpoints and anchored run proofs |
 | `chainproof mission import` | verify and atomically rebuild a portable mission proof |
+| `chainproof mission workspace export` | create verified proof, views, and artifact directory |
+| `chainproof mission workspace verify` | verify workspace offline without creating local state |
+| `chainproof mission workspace import` | atomically rebuild mission and referenced artifacts |
 | `chainproof mission claim` | atomically acquire an expiring mission lease |
 | `chainproof mission lease` | inspect active ownership and coordination history |
 | `chainproof mission renew` | extend a lease using its current token |

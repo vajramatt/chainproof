@@ -36,9 +36,10 @@ Markdown is useful as generated mission context or human-readable summary, but
 is not suitable as canonical coordination state: parsing is ambiguous, atomic
 multi-agent updates are difficult, and schema evolution is fragile. Current
 `main` can verify and atomically import continuity JSON into another SQLite
-instance while rebuilding search rows. Roadmap work will add first-class
-portable mission workspaces with artifact files, manifests, JSONL projections,
-and optional generated Markdown views.
+instance while rebuilding search rows. It also exports and verifies first-class
+portable mission workspaces with artifact files, checksum manifests,
+deterministic JSONL projections, and generated Markdown views. Import commits
+canonical proof rows, derived search rows, and artifact bodies atomically.
 
 ## Indexed evidence
 

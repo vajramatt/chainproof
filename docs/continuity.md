@@ -308,6 +308,29 @@ imported. Agent profiles, private keys, and artifact bodies are also outside
 continuity bundle v1. Source and destination must not continue same active
 mission concurrently because v1 has no cross-host ownership protocol.
 
+## Portable filesystem workspace
+
+```sh
+chainproof mission workspace export MISSION_ID ./mission-workspace
+chainproof mission workspace verify ./mission-workspace
+CHAINPROOF_DB=/path/to/destination/chainproof.db \
+  chainproof mission workspace import ./mission-workspace
+```
+
+Format `chainproof.mission-workspace.v1` packages:
+
+- canonical `continuity.json`
+- deterministic, deduplicated `events.jsonl`
+- generated `README.md` with objective, latest checkpoint, and proof warning
+- checksum-bearing `manifest.json`
+- each referenced content-addressed body under `artifacts/SHA256`
+
+Verifier rejects missing, undeclared, non-regular, symlinked, rechecksummed but
+false derived views, invalid proof, and artifact inconsistencies. Offline
+verification does not open a ledger or create identity state. Import commits
+mission proof rows, derived search rows, and artifacts together. See
+[`spec/mission-workspace-v1.md`](../spec/mission-workspace-v1.md).
+
 ## Complete the mission
 
 ```sh

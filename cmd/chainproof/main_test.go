@@ -20,6 +20,7 @@ import (
 	backupstore "github.com/vajramatt/chainproof/internal/backup"
 	"github.com/vajramatt/chainproof/internal/continuity"
 	"github.com/vajramatt/chainproof/internal/identity"
+	"github.com/vajramatt/chainproof/internal/missionworkspace"
 	"github.com/vajramatt/chainproof/internal/proof"
 	"github.com/vajramatt/chainproof/internal/service"
 	"github.com/vajramatt/chainproof/internal/store"
@@ -59,6 +60,8 @@ func TestStructuredCommandErrorContract(t *testing.T) {
 		{name: "destination exists", err: fmt.Errorf("%w: path", backupstore.ErrDestinationExists), wantCode: "destination_exists", wantExit: 1},
 		{name: "invalid mission import", err: fmt.Errorf("%w: bad checkpoint", store.ErrInvalidMissionImport), wantCode: "mission_import_invalid", wantExit: 3},
 		{name: "mission import collision", err: fmt.Errorf("%w: mission exists", store.ErrMissionImportCollision), wantCode: "mission_import_collision", wantExit: 1},
+		{name: "invalid mission workspace", err: fmt.Errorf("%w: checksum", missionworkspace.ErrInvalid), wantCode: "mission_workspace_invalid", wantExit: 3},
+		{name: "workspace destination exists", err: fmt.Errorf("%w: path", missionworkspace.ErrDestinationExists), wantCode: "destination_exists", wantExit: 1},
 		{name: "command", err: errors.New("database is locked"), wantCode: "command_failed", wantExit: 1},
 	}
 	for _, tt := range tests {
@@ -186,10 +189,10 @@ func TestCapabilitiesJSONDescribesCurrentBuild(t *testing.T) {
 	if capabilities.Network["default_url"] != "http://127.0.0.1:7331" || capabilities.Network["listen_scope"] != "loopback" || capabilities.Network["authentication"] != "none" {
 		t.Fatalf("unexpected capability network boundary: %s", capabilitiesJSON)
 	}
-	if capabilities.Protocols["provenance"] != "chainproof.bundle.v1" || capabilities.Protocols["continuity"] != "chainproof.continuity.bundle.v1" || capabilities.Protocols["agent_work"] != "chainproof.agent-work.v1" || capabilities.Protocols["agent_identity"] != "chainproof.agent.v1" {
+	if capabilities.Protocols["provenance"] != "chainproof.bundle.v1" || capabilities.Protocols["continuity"] != "chainproof.continuity.bundle.v1" || capabilities.Protocols["agent_work"] != "chainproof.agent-work.v1" || capabilities.Protocols["agent_identity"] != "chainproof.agent.v1" || capabilities.Protocols["mission_workspace"] != missionworkspace.Format {
 		t.Fatalf("unexpected capability protocols: %s", capabilitiesJSON)
 	}
-	wantFeatures := []string{"agent_identity", "artifact_store", "codex_collector", "codex_work", "continuity_proofs", "independent_process_coordination", "instance_backup_restore", "integration_pull", "integration_push", "local_api", "machine_readable_doctor", "machine_readable_init", "mission_import", "mission_leases", "mission_recovery", "missions", "process_wrap", "provenance_proofs", "search", "stable_exit_codes", "structured_errors", "tui", "web_explorer"}
+	wantFeatures := []string{"agent_identity", "artifact_store", "codex_collector", "codex_work", "continuity_proofs", "independent_process_coordination", "instance_backup_restore", "integration_pull", "integration_push", "local_api", "machine_readable_doctor", "machine_readable_init", "mission_import", "mission_leases", "mission_recovery", "mission_workspaces", "missions", "process_wrap", "provenance_proofs", "search", "stable_exit_codes", "structured_errors", "tui", "web_explorer"}
 	if !reflect.DeepEqual(capabilities.Features, wantFeatures) {
 		t.Fatalf("features = %v, want %v", capabilities.Features, wantFeatures)
 	}
@@ -647,6 +650,90 @@ func TestMissionCLIImportsVerifiedPortableProof(t *testing.T) {
 	}
 	if err = run([]string{"mission", "import", proofPath}); !errors.Is(err, store.ErrMissionImportCollision) {
 		t.Fatalf("duplicate CLI import error = %v", err)
+	}
+}
+
+func TestMissionWorkspaceCLIExportsVerifiesAndImportsWithoutIdentity(t *testing.T) {
+	ctx := context.Background()
+	sourceDB := filepath.Join(t.TempDir(), "source.db")
+	source, err := store.Open(sourceDB)
+	if err != nil {
+		t.Fatal(err)
+	}
+	mission, err := source.StartMission(ctx, continuity.MissionInput{Agent: "builder", Objective: "Move workspace"})
+	if err != nil {
+		t.Fatal(err)
+	}
+	agentRun, err := source.Start(ctx, "builder", "test", "gpt-test", map[string]any{"mission_id": mission.ID})
+	if err != nil {
+		t.Fatal(err)
+	}
+	body := []byte("workspace artifact")
+	hash, err := source.PutArtifact(ctx, "", "text/plain", body)
+	if err != nil {
+		t.Fatal(err)
+	}
+	event, err := source.Append(ctx, agentRun.ID, proof.EventInput{
+		Kind: "artifact.created", Source: proof.Source{Adapter: "test", Mode: "observed"},
+		Artifacts: []any{map[string]any{"hash": hash, "media_type": "text/plain"}},
+	})
+	if err != nil {
+		t.Fatal(err)
+	}
+	if _, err = source.CreateCheckpoint(ctx, mission.ID, agentRun.ID, continuity.CheckpointInput{Summary: "Ready", Evidence: []continuity.EvidenceRef{{EventID: event.ID}}}); err != nil {
+		t.Fatal(err)
+	}
+	if err = source.Close(); err != nil {
+		t.Fatal(err)
+	}
+
+	workspacePath := filepath.Join(t.TempDir(), "workspace")
+	t.Setenv("CHAINPROOF_DB", sourceDB)
+	t.Setenv("CHAINPROOF_CODEX_DISABLED", "1")
+	exportJSON := captureStdout(t, func() error {
+		return run([]string{"mission", "workspace", "export", mission.ID, workspacePath})
+	})
+	if !strings.Contains(exportJSON, `"status": "exported"`) {
+		t.Fatalf("workspace export output: %s", exportJSON)
+	}
+
+	unusedDB := filepath.Join(t.TempDir(), "must-not-exist.db")
+	t.Setenv("CHAINPROOF_DB", unusedDB)
+	verifyJSON := captureStdout(t, func() error {
+		return run([]string{"mission", "workspace", "verify", workspacePath})
+	})
+	if !strings.Contains(verifyJSON, `"status": "verified"`) {
+		t.Fatalf("workspace verify output: %s", verifyJSON)
+	}
+	if _, err = os.Lstat(unusedDB); !errors.Is(err, os.ErrNotExist) {
+		t.Fatalf("offline workspace verification created database: %v", err)
+	}
+
+	destinationDB := filepath.Join(t.TempDir(), "destination.db")
+	destinationAgents := filepath.Join(t.TempDir(), "agents")
+	t.Setenv("CHAINPROOF_DB", destinationDB)
+	t.Setenv("CHAINPROOF_AGENT_HOME", destinationAgents)
+	importJSON := captureStdout(t, func() error {
+		return run([]string{"mission", "workspace", "import", workspacePath})
+	})
+	if !strings.Contains(importJSON, `"status": "imported"`) || !strings.Contains(importJSON, `"artifacts_imported": 1`) {
+		t.Fatalf("workspace import output: %s", importJSON)
+	}
+	if _, err = os.Lstat(destinationAgents); !errors.Is(err, os.ErrNotExist) {
+		t.Fatalf("workspace import created identity state: %v", err)
+	}
+	destination, err := store.Open(destinationDB)
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer destination.Close()
+	resumed, err := destination.ResumeMission(ctx, mission.ID)
+	if err != nil || !resumed.Verification.Valid {
+		t.Fatalf("workspace CLI import did not resume: %+v err=%v", resumed, err)
+	}
+	loaded, mediaType, err := destination.Artifact(ctx, hash)
+	if err != nil || !bytes.Equal(loaded, body) || mediaType != "text/plain" {
+		t.Fatalf("workspace CLI artifact: body=%q media=%q err=%v", loaded, mediaType, err)
 	}
 }
 

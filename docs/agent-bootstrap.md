@@ -27,12 +27,13 @@ Top-level fields:
 - `paths`: resolved `ledger` and `agent_home`
 - `network`: fixed local API URL, `loopback` listen scope, and `none`
   authentication mode
-- `protocols`: exact provenance, continuity, Agent Work, and identity format IDs
+- `protocols`: exact provenance, continuity, mission workspace, Agent Work, and
+  identity format IDs
 - `features`: sorted identifiers for behavior compiled into this binary
 
 Capability output never claims planned behavior. Current `main` advertises
-`mission_import`; signed attestations, key recovery, filesystem mission
-workspaces, and multi-host coordination remain absent until implemented.
+`mission_import` and `mission_workspaces`; signed attestations, key recovery,
+and multi-host coordination remain absent until implemented.
 
 ## Initialize state
 
@@ -131,6 +132,8 @@ Stable exit classes:
 - `3`, `verification_failed`: proof verification rejected input
 - `3`, `mission_import_invalid`: continuity import failed format, chain, run
   prefix, or record validation before mutation
+- `3`, `mission_workspace_invalid`: workspace manifest, file inventory,
+  checksum, proof, derived view, or artifact validation failed before mutation
 
 Flag parsing is quiet, so structured stderr is never prefixed by parser prose.
 Unknown commands are rejected before database or identity initialization.
@@ -158,6 +161,21 @@ run, then inserts canonical mission, checkpoint, run, and event records in one
 transaction. Search rows are rebuilt as derived state. Import preserves source
 mission status and imports no lease, profile, private key, or artifact body.
 Every destination identifier must be unused; any collision aborts whole import.
+
+## Export and import a mission workspace
+
+```sh
+chainproof mission workspace export MISSION_ID DIRECTORY
+chainproof mission workspace verify DIRECTORY
+chainproof mission workspace import DIRECTORY
+```
+
+Workspace format `chainproof.mission-workspace.v1` carries continuity proof,
+deterministic event JSONL and Markdown projections, checksum manifest, and every
+referenced content-addressed artifact body. Offline verification creates no
+ledger or identity. Import verifies complete package, then commits mission and
+artifact records in one SQLite transaction. Profiles, private keys, leases, and
+lease history never enter workspace.
 
 ## Keep configured state across login
 

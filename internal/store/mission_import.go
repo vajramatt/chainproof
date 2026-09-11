@@ -1,8 +1,11 @@
 package store
 
 import (
+	"bytes"
 	"context"
+	"crypto/sha256"
 	"database/sql"
+	"encoding/hex"
 	"errors"
 	"fmt"
 	"strings"
@@ -26,6 +29,13 @@ type MissionImportResult struct {
 	CheckpointCount int                `json:"checkpoints_imported"`
 }
 
+// MissionImportArtifact is one verified content-addressed body imported with a mission.
+type MissionImportArtifact struct {
+	Hash      string
+	MediaType string
+	Body      []byte
+}
+
 type preparedMissionImport struct {
 	mission         continuity.Mission
 	checkpoints     []continuity.Checkpoint
@@ -37,6 +47,32 @@ type preparedMissionImport struct {
 }
 
 func (s *Store) ImportMission(ctx context.Context, bundle continuity.Bundle) (MissionImportResult, error) {
+	return s.importMission(ctx, bundle, nil)
+}
+
+// ValidateMissionImport checks destination-independent proof and record rules.
+func ValidateMissionImport(bundle continuity.Bundle) error {
+	_, err := prepareMissionImport(bundle)
+	return err
+}
+
+// ImportMissionWithArtifacts atomically rebuilds canonical mission and artifact state.
+func (s *Store) ImportMissionWithArtifacts(ctx context.Context, bundle continuity.Bundle, artifacts []MissionImportArtifact) (MissionImportResult, error) {
+	seen := make(map[string]struct{}, len(artifacts))
+	for _, artifact := range artifacts {
+		sum := sha256.Sum256(artifact.Body)
+		if artifact.Hash != hex.EncodeToString(sum[:]) {
+			return MissionImportResult{}, fmt.Errorf("%w: artifact hash mismatch for %q", ErrInvalidMissionImport, artifact.Hash)
+		}
+		if _, exists := seen[artifact.Hash]; exists {
+			return MissionImportResult{}, fmt.Errorf("%w: duplicate artifact %q", ErrInvalidMissionImport, artifact.Hash)
+		}
+		seen[artifact.Hash] = struct{}{}
+	}
+	return s.importMission(ctx, bundle, artifacts)
+}
+
+func (s *Store) importMission(ctx context.Context, bundle continuity.Bundle, artifacts []MissionImportArtifact) (MissionImportResult, error) {
 	prepared, err := prepareMissionImport(bundle)
 	if err != nil {
 		return MissionImportResult{}, err
@@ -44,7 +80,7 @@ func (s *Store) ImportMission(ctx context.Context, bundle continuity.Bundle) (Mi
 	var result MissionImportResult
 	var lastErr error
 	for attempt := 0; attempt < maxWriteAttempts; attempt++ {
-		result, err = s.importMissionOnce(ctx, prepared)
+		result, err = s.importMissionOnce(ctx, prepared, artifacts)
 		if err == nil || !isSQLiteContention(err) {
 			return result, err
 		}
@@ -171,7 +207,7 @@ func validImportedRunStatus(status string) bool {
 	return status == "active" || status == "idle" || status == "completed" || status == "failed" || status == "cancelled"
 }
 
-func (s *Store) importMissionOnce(ctx context.Context, prepared preparedMissionImport) (MissionImportResult, error) {
+func (s *Store) importMissionOnce(ctx context.Context, prepared preparedMissionImport, artifacts []MissionImportArtifact) (MissionImportResult, error) {
 	tx, err := s.db.BeginTx(ctx, nil)
 	if err != nil {
 		return MissionImportResult{}, err
@@ -201,6 +237,17 @@ func (s *Store) importMissionOnce(ctx context.Context, prepared preparedMissionI
 			return MissionImportResult{}, queryErr
 		} else if exists {
 			return MissionImportResult{}, fmt.Errorf("%w: checkpoint %s already exists", ErrMissionImportCollision, checkpoint.ID)
+		}
+	}
+	for _, artifact := range artifacts {
+		var mediaType string
+		var body []byte
+		queryErr := tx.QueryRowContext(ctx, `SELECT media_type,body FROM artifacts WHERE hash=?`, artifact.Hash).Scan(&mediaType, &body)
+		switch {
+		case queryErr == nil && (mediaType != artifact.MediaType || !bytes.Equal(body, artifact.Body)):
+			return MissionImportResult{}, fmt.Errorf("%w: artifact %s already exists with different content or media type", ErrMissionImportCollision, artifact.Hash)
+		case queryErr != nil && !errors.Is(queryErr, sql.ErrNoRows):
+			return MissionImportResult{}, queryErr
 		}
 	}
 
@@ -244,6 +291,11 @@ func (s *Store) importMissionOnce(ctx context.Context, prepared preparedMissionI
 				return MissionImportResult{}, classifyMissionImportWrite(err)
 			}
 			attached[checkpoint.Run.RunID] = struct{}{}
+		}
+	}
+	for _, artifact := range artifacts {
+		if _, err = tx.ExecContext(ctx, `INSERT INTO artifacts(hash,media_type,body,size,created_at) VALUES(?,?,?,?,?) ON CONFLICT(hash) DO NOTHING`, artifact.Hash, artifact.MediaType, artifact.Body, len(artifact.Body), time.Now().UTC().Format(time.RFC3339Nano)); err != nil {
+			return MissionImportResult{}, classifyMissionImportWrite(err)
 		}
 	}
 	if err = tx.Commit(); err != nil {
