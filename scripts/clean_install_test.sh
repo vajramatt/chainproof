@@ -4,10 +4,21 @@ set -eu
 repo_root=$(CDPATH= cd -- "$(dirname -- "$0")/.." && pwd)
 test_root=$(mktemp -d "${TMPDIR:-/tmp}/chainproof-clean-install.XXXXXX")
 server_pid=
+stage=setup
 cleanup() {
+  status=$?
   if [ -n "$server_pid" ]; then
     kill "$server_pid" 2>/dev/null || true
     wait "$server_pid" 2>/dev/null || true
+  fi
+  if [ "$status" -ne 0 ]; then
+    echo "clean install checks failed during $stage" >&2
+    for diagnostic in server.log tui.log service.log service-install.log service-status.log; do
+      if [ -s "$test_root/$diagnostic" ]; then
+        echo "$diagnostic:" >&2
+        cat "$test_root/$diagnostic" >&2
+      fi
+    done
   fi
   rm -rf "$test_root"
 }
@@ -96,6 +107,7 @@ binary="$BINDIR/chainproof"
 test -x "$binary"
 "$binary" version | grep -F "$binary_version" >/dev/null
 
+stage=bootstrap
 "$binary" capabilities --json >"$test_root/capabilities.json"
 grep -F '"product": "chainproof"' "$test_root/capabilities.json" >/dev/null
 if [ -e "$HOME/.chainproof" ]; then
@@ -136,6 +148,7 @@ grep -F '"valid": true' "$test_root/verify.json" >/dev/null
 "$binary" verify-continuity-file "$test_root/mission-proof.json" >"$test_root/verify-continuity.json"
 grep -F '"valid": true' "$test_root/verify-continuity.json" >/dev/null
 
+stage=backup_restore
 "$binary" backup "$test_root/backup" >"$test_root/backup.json"
 "$binary" restore "$test_root/backup" "$test_root/restored" >"$test_root/restore.json"
 CHAINPROOF_DB="$test_root/restored/chainproof.db" \
@@ -143,6 +156,7 @@ CHAINPROOF_AGENT_HOME="$test_root/restored/agents" \
   "$binary" doctor --json >"$test_root/restored-doctor.json"
 grep -F '"status": "ready"' "$test_root/restored-doctor.json" >/dev/null
 
+stage=loopback_explorer
 address=127.0.0.1:17331
 "$binary" serve "$address" >"$test_root/server.log" 2>&1 &
 server_pid=$!
@@ -170,11 +184,13 @@ kill "$server_pid"
 wait "$server_pid" 2>/dev/null || true
 server_pid=
 
+stage=tui
 case "$os" in
   darwin) printf q | script -q /dev/null "$binary" ui >"$test_root/tui.log" ;;
   linux) printf q | script -q -c "$binary ui" /dev/null >"$test_root/tui.log" ;;
 esac
 
+stage=service_lifecycle
 : >"$test_root/service.log"
 "$binary" service install >"$test_root/service-install.log"
 case "$os" in
