@@ -23,13 +23,14 @@ carry structured run and event records plus chain heads; verification does not
 require original database or running ChainProof instance.
 
 Current `main` exercises that claim with independent OS processes, not only
-goroutines. Concurrent appenders retry full transactions and retain every event
-in one valid chain. Concurrent mission claims, queue acquisitions, handoffs,
-renewals, and releases retry from fresh state and return semantic ownership or
-queue results; lease history remains serialized. Concurrent recovery of an
-expired lease produces one new owner linked to the abandoned lease. A forced
-process kill with an uncommitted event is rolled back by SQLite WAL recovery,
-after which new events append and verify normally.
+goroutines. Concurrent appenders and checkpoint writers retry full transactions
+and retain every record in valid chains. Concurrent mission claims, queue
+acquisitions, handoffs, renewals, and releases retry from fresh state and return
+semantic ownership or queue results; lease history remains serialized.
+Concurrent recovery of an expired lease produces one new owner linked to the
+abandoned lease. A forced process kill during an uncommitted event or checkpoint
+rolls back every partial row and manifest update through SQLite WAL recovery;
+the next event or checkpoint then appends and verifies normally.
 
 Markdown is useful as generated mission context or human-readable summary, but
 is not suitable as canonical coordination state: parsing is ambiguous, atomic

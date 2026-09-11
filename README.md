@@ -110,11 +110,12 @@ explorer, and loopback API. Broader unattended use needs these release gates:
 2. **Process and failure hardening.** Current `main` tests independent OS
    processes concurrently appending and running the full mission lease
    lifecycle against one WAL database. Bounded transaction retries preserve
-   complete verifiable event chains; serialize claim, acquire, renew, release,
-   and handoff; reclaim expired leases with one winner; and recover cleanly
-   after forced termination with an uncommitted write. Custom service state also
-   persists across login. Interrupted checkpoints, corrupted profiles, lost
-   keys, upgrades, and backup/restore still need deeper failure testing.
+   complete verifiable event chains; serialize checkpoints plus claim, acquire,
+   renew, release, and handoff; reclaim expired leases with one winner; and
+   recover cleanly after forced termination during an uncommitted event or
+   checkpoint. Custom service state also persists across login. Corrupted
+   profiles, lost keys, upgrades, and backup/restore still need deeper failure
+   testing.
 3. **Clean-install verification.** Exercise release archives, checksums,
    installer, first-run profile creation, service setup, TUI, loopback web
    explorer, and uninstall behavior on clean supported macOS and Linux systems.
@@ -654,8 +655,9 @@ is still an imported chain.
 
 ChainProof stores runs, canonical events, adapter cursors, and artifacts in a
 local SQLite database using WAL mode and serialized writes. Bounded retries
-around whole append and mission lease transactions resolve independent-process
-contention from fresh state instead of leaking raw lock errors.
+around whole event, checkpoint, and mission lease transactions resolve
+independent-process contention from fresh state instead of leaking raw lock
+errors.
 Artifact hashes are computed over raw bytes—not decoded text—and
 content-addressed by SHA-256.
 

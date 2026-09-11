@@ -30,10 +30,10 @@ formats, and release artifacts.
   completed, reject new appends to its associated runs.
 - Keep queue acquisition atomic: select only active missions without a live
   lease, verify continuity before claim, and return bounded context with token.
-- Under independent-process contention, preserve every successful append and
-  serialize every lease transition. Retry bounded SQLite contention around
-  whole transactions; do not expose raw lock errors when fresh state can yield
-  an ownership, lifecycle, or queue result.
+- Under independent-process contention, preserve every successful event and
+  checkpoint append and serialize every lease transition. Retry bounded SQLite
+  contention around whole transactions; do not expose raw lock errors when
+  fresh state can yield an ownership, lifecycle, or queue result.
 - Keep Agent Work Protocol environment variables harness-neutral. Context files
   must be private, ephemeral, verified before child start, and treated as data
   rather than generic prompt text.

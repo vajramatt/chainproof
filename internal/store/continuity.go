@@ -104,6 +104,32 @@ func (s *Store) Missions(ctx context.Context, status string, limit int) ([]conti
 }
 
 func (s *Store) CreateCheckpoint(ctx context.Context, missionID, runID string, input continuity.CheckpointInput) (continuity.Checkpoint, error) {
+	var checkpoint continuity.Checkpoint
+	var err error
+	var lastErr error
+	for attempt := 0; attempt < maxWriteAttempts; attempt++ {
+		checkpoint, err = s.createCheckpointOnce(ctx, missionID, runID, input)
+		if err == nil || !isCheckpointContention(err) {
+			return checkpoint, err
+		}
+		lastErr = err
+		if err = waitForWriteRetry(ctx, attempt); err != nil {
+			return continuity.Checkpoint{}, err
+		}
+	}
+	return continuity.Checkpoint{}, fmt.Errorf("checkpoint contention retries exhausted: %w", lastErr)
+}
+
+var errConcurrentCheckpoint = errors.New("concurrent checkpoint detected")
+
+func isCheckpointContention(err error) bool {
+	if errors.Is(err, errConcurrentCheckpoint) || isSQLiteContention(err) {
+		return true
+	}
+	return isSQLiteUniqueConstraint(err, "checkpoints.mission_id, checkpoints.sequence")
+}
+
+func (s *Store) createCheckpointOnce(ctx context.Context, missionID, runID string, input continuity.CheckpointInput) (continuity.Checkpoint, error) {
 	tx, err := s.db.BeginTx(ctx, nil)
 	if err != nil {
 		return continuity.Checkpoint{}, err
@@ -193,7 +219,7 @@ func (s *Store) CreateCheckpoint(ctx context.Context, missionID, runID string, i
 	}
 	changed, _ := result.RowsAffected()
 	if changed != 1 {
-		return continuity.Checkpoint{}, errors.New("concurrent checkpoint detected")
+		return continuity.Checkpoint{}, errConcurrentCheckpoint
 	}
 	if err = tx.Commit(); err != nil {
 		return continuity.Checkpoint{}, err

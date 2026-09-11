@@ -339,6 +339,55 @@ func TestConcurrentExpiredLeaseRecoveryAcrossProcessesHasOneWinner(t *testing.T)
 	}
 }
 
+func TestConcurrentCheckpointsAcrossProcessesRemainSerializedAndVerifiable(t *testing.T) {
+	root := t.TempDir()
+	database := filepath.Join(root, "chainproof.db")
+	store, err := Open(database)
+	if err != nil {
+		t.Fatal(err)
+	}
+	mission, err := store.StartMission(context.Background(), continuity.MissionInput{Agent: "process-test", Objective: "Checkpoint once"})
+	if err != nil {
+		t.Fatal(err)
+	}
+	run, err := store.Start(context.Background(), "process-test", "test", "", map[string]any{"mission_id": mission.ID})
+	if err != nil {
+		t.Fatal(err)
+	}
+	if _, err = store.Append(context.Background(), run.ID, proof.EventInput{Kind: "checkpoint-input", Source: proof.Source{Adapter: "process-test", Mode: "reported"}}); err != nil {
+		t.Fatal(err)
+	}
+	if err = store.Close(); err != nil {
+		t.Fatal(err)
+	}
+
+	values := make([]string, 8)
+	for index := range values {
+		values[index] = run.ID
+	}
+	for index, result := range contendStoreProcesses(t, root, "checkpoint", database, mission.ID, values) {
+		if result.err != nil {
+			t.Errorf("checkpoint process %d failed: %v\n%s", index, result.err, result.output)
+		}
+	}
+	if t.Failed() {
+		return
+	}
+	store, err = Open(database)
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer store.Close()
+	checkpoints, err := store.Checkpoints(context.Background(), mission.ID)
+	if err != nil {
+		t.Fatal(err)
+	}
+	verification := store.VerifyMission(context.Background(), mission.ID)
+	if len(checkpoints) != len(values) || !verification.Valid || verification.CheckpointCount != len(values) {
+		t.Fatalf("concurrent checkpoint result invalid: checkpoints=%+v verification=%+v", checkpoints, verification)
+	}
+}
+
 func TestConcurrentMissionAcquisitionAcrossProcessesHasOneSemanticWinner(t *testing.T) {
 	root := t.TempDir()
 	database := filepath.Join(root, "chainproof.db")
@@ -462,6 +511,75 @@ func TestForcedTerminationRollsBackUncommittedEventAndRecovers(t *testing.T) {
 	}
 }
 
+func TestForcedTerminationRollsBackUncommittedCheckpointAndRecovers(t *testing.T) {
+	root := t.TempDir()
+	database := filepath.Join(root, "chainproof.db")
+	store, err := Open(database)
+	if err != nil {
+		t.Fatal(err)
+	}
+	mission, err := store.StartMission(context.Background(), continuity.MissionInput{Agent: "process-test", Objective: "Survive interrupted checkpoint"})
+	if err != nil {
+		t.Fatal(err)
+	}
+	run, err := store.Start(context.Background(), "process-test", "test", "", map[string]any{"mission_id": mission.ID})
+	if err != nil {
+		t.Fatal(err)
+	}
+	if _, err = store.Append(context.Background(), run.ID, proof.EventInput{Kind: "before-checkpoint", Source: proof.Source{Adapter: "process-test", Mode: "reported"}}); err != nil {
+		t.Fatal(err)
+	}
+	if err = store.Close(); err != nil {
+		t.Fatal(err)
+	}
+
+	ready := filepath.Join(root, "checkpoint-ready")
+	command := exec.Command(os.Args[0], "-test.run=^TestStoreProcessHelper$", "--", "crash-checkpoint", database, mission.ID, "unused", ready, run.ID)
+	command.Env = append(os.Environ(), "CHAINPROOF_STORE_PROCESS_HELPER=1")
+	var output strings.Builder
+	command.Stdout = &output
+	command.Stderr = &output
+	if err = command.Start(); err != nil {
+		t.Fatal(err)
+	}
+	waitForProcessFiles(t, root, "checkpoint-ready", 1)
+	if err = command.Process.Kill(); err != nil {
+		t.Fatal(err)
+	}
+	if err = command.Wait(); err == nil {
+		t.Fatal("forced checkpoint process termination unexpectedly succeeded")
+	}
+
+	store, err = Open(database)
+	if err != nil {
+		t.Fatalf("ledger did not recover after interrupted checkpoint: %v\n%s", err, output.String())
+	}
+	defer store.Close()
+	storedMission, err := store.Mission(context.Background(), mission.ID)
+	if err != nil {
+		t.Fatal(err)
+	}
+	checkpoints, err := store.Checkpoints(context.Background(), mission.ID)
+	if err != nil {
+		t.Fatal(err)
+	}
+	var attachedRuns int
+	if err = store.db.QueryRow(`SELECT COUNT(*) FROM mission_runs WHERE mission_id=?`, mission.ID).Scan(&attachedRuns); err != nil {
+		t.Fatal(err)
+	}
+	if storedMission.CheckpointCount != 0 || storedMission.ChainHead != continuity.GenesisHash || len(checkpoints) != 0 || attachedRuns != 0 {
+		t.Fatalf("uncommitted checkpoint survived: mission=%+v checkpoints=%+v attached_runs=%d", storedMission, checkpoints, attachedRuns)
+	}
+	checkpoint, err := store.CreateCheckpoint(context.Background(), mission.ID, run.ID, continuity.CheckpointInput{Summary: "Recovered after interrupted checkpoint"})
+	if err != nil {
+		t.Fatal(err)
+	}
+	verification := store.VerifyMission(context.Background(), mission.ID)
+	if checkpoint.Sequence != 0 || !verification.Valid || verification.CheckpointCount != 1 {
+		t.Fatalf("post-interruption checkpoint did not verify: checkpoint=%+v verification=%+v", checkpoint, verification)
+	}
+}
+
 func TestStoreProcessHelper(t *testing.T) {
 	if os.Getenv("CHAINPROOF_STORE_PROCESS_HELPER") != "1" {
 		return
@@ -483,6 +601,49 @@ func TestStoreProcessHelper(t *testing.T) {
 		_, txErr = tx.Exec(`INSERT INTO events(event_id,run_id,sequence,timestamp,kind,collection_mode,event_json,event_hash) VALUES(?,?,?,?,?,?,?,?)`,
 			"uncommitted-crash-event", args[2], 0, time.Now().UTC().Format(time.RFC3339Nano), "crash-write", "reported", `{}`, strings.Repeat("f", 64))
 		if txErr != nil {
+			t.Fatal(txErr)
+		}
+		if txErr = os.WriteFile(args[4], []byte("ready"), 0600); txErr != nil {
+			t.Fatal(txErr)
+		}
+		for {
+			time.Sleep(time.Second)
+		}
+	}
+	if args[0] == "crash-checkpoint" {
+		tx, txErr := store.db.BeginTx(context.Background(), nil)
+		if txErr != nil {
+			t.Fatal(txErr)
+		}
+		mission, txErr := scanMission(tx.QueryRow(`SELECT mission_id,agent,objective,status,created_at,updated_at,checkpoint_count,chain_head,metadata FROM missions WHERE mission_id=?`, args[2]))
+		if txErr != nil {
+			t.Fatal(txErr)
+		}
+		run, txErr := scanRun(tx.QueryRow(`SELECT run_id,agent,harness,model,status,started_at,completed_at,entry_count,chain_head,metadata FROM runs WHERE run_id=?`, args[5]))
+		if txErr != nil {
+			t.Fatal(txErr)
+		}
+		input := continuity.CheckpointInput{
+			Run:     continuity.RunAnchor{RunID: run.ID, EntryCount: run.EntryCount, ChainHead: run.ChainHead},
+			Summary: "uncommitted checkpoint",
+		}
+		checkpoint, txErr := continuity.NewCheckpoint(mission, mission.CheckpointCount, mission.ChainHead, time.Now().UTC(), input)
+		if txErr != nil {
+			t.Fatal(txErr)
+		}
+		storedCheckpoint := checkpoint
+		storedCheckpoint.CheckpointHash = ""
+		raw, txErr := proof.CanonicalJSON(storedCheckpoint)
+		if txErr != nil {
+			t.Fatal(txErr)
+		}
+		if _, txErr = tx.Exec(`INSERT INTO mission_runs(mission_id,run_id,attached_at) VALUES(?,?,?)`, mission.ID, run.ID, checkpoint.Timestamp.Format(time.RFC3339Nano)); txErr != nil {
+			t.Fatal(txErr)
+		}
+		if _, txErr = tx.Exec(`INSERT INTO checkpoints(checkpoint_id,mission_id,sequence,timestamp,checkpoint_json,checkpoint_hash) VALUES(?,?,?,?,?,?)`, checkpoint.ID, mission.ID, checkpoint.Sequence, checkpoint.Timestamp.Format(time.RFC3339Nano), string(raw), checkpoint.CheckpointHash); txErr != nil {
+			t.Fatal(txErr)
+		}
+		if _, txErr = tx.Exec(`UPDATE missions SET checkpoint_count=checkpoint_count+1,chain_head=?,updated_at=? WHERE mission_id=?`, checkpoint.CheckpointHash, checkpoint.Timestamp.Format(time.RFC3339Nano), mission.ID); txErr != nil {
 			t.Fatal(txErr)
 		}
 		if txErr = os.WriteFile(args[4], []byte("ready"), 0600); txErr != nil {
@@ -535,6 +696,8 @@ func TestStoreProcessHelper(t *testing.T) {
 		_, err = store.ReleaseMission(ctx, args[2], args[5])
 	case "renew":
 		_, err = store.RenewMission(ctx, args[2], args[5], time.Minute)
+	case "checkpoint":
+		_, err = store.CreateCheckpoint(ctx, args[2], args[5], continuity.CheckpointInput{Summary: "process checkpoint"})
 	default:
 		t.Fatalf("invalid helper operation: %s", args[0])
 	}
