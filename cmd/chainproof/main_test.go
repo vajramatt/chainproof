@@ -482,9 +482,22 @@ func TestBackupAndRestoreCLIProducesReadyIsolatedInstance(t *testing.T) {
 	doctorJSON := captureStdout(t, func() error { return run([]string{"doctor", "--json"}) })
 	var doctor struct {
 		Status string `json:"status"`
+		Checks map[string]struct {
+			Status string `json:"status"`
+		} `json:"checks"`
 	}
-	if err := json.Unmarshal([]byte(doctorJSON), &doctor); err != nil || doctor.Status != "ready" {
+	if err := json.Unmarshal([]byte(doctorJSON), &doctor); err != nil {
 		t.Fatalf("restored instance is not ready: %s err=%v", doctorJSON, err)
+	}
+	if doctor.Checks["ledger"].Status != "pass" || doctor.Checks["agent_identity"].Status != "pass" {
+		t.Fatalf("restored state failed health checks: %s", doctorJSON)
+	}
+	if runtime.GOOS == "windows" {
+		if doctor.Status != "attention" || doctor.Checks["platform"].Status != "fail" {
+			t.Fatalf("restored Windows state status is incorrect: %s", doctorJSON)
+		}
+	} else if doctor.Status != "ready" {
+		t.Fatalf("restored instance is not ready: %s", doctorJSON)
 	}
 }
 
