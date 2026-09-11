@@ -5,6 +5,7 @@ import (
 	"context"
 	"encoding/json"
 	"errors"
+	"fmt"
 	"io"
 	"net/http"
 	"net/http/httptest"
@@ -17,6 +18,7 @@ import (
 	"time"
 
 	"github.com/vajramatt/chainproof/internal/continuity"
+	"github.com/vajramatt/chainproof/internal/identity"
 	"github.com/vajramatt/chainproof/internal/proof"
 	"github.com/vajramatt/chainproof/internal/service"
 	"github.com/vajramatt/chainproof/internal/store"
@@ -51,6 +53,7 @@ func TestStructuredCommandErrorContract(t *testing.T) {
 	}{
 		{name: "usage", err: errors.New(`unknown command "bogus"`), wantCode: "usage", wantExit: 2},
 		{name: "verification", err: errors.New("verification failed"), wantCode: "verification_failed", wantExit: 3},
+		{name: "incomplete identity", err: fmt.Errorf("%w: private key is missing", identity.ErrIncomplete), wantCode: "identity_incomplete", wantExit: 1},
 		{name: "command", err: errors.New("database is locked"), wantCode: "command_failed", wantExit: 1},
 	}
 	for _, tt := range tests {
@@ -280,6 +283,7 @@ func TestDoctorJSONReportsUninitializedWithoutCreatingState(t *testing.T) {
 		} `json:"paths"`
 		Checks map[string]struct {
 			Status string `json:"status"`
+			Code   string `json:"code"`
 		} `json:"checks"`
 	}
 	if err := json.Unmarshal([]byte(doctorJSON), &report); err != nil {
@@ -288,7 +292,7 @@ func TestDoctorJSONReportsUninitializedWithoutCreatingState(t *testing.T) {
 	if report.SchemaVersion != "1" || report.Status != "uninitialized" || report.Paths.Ledger != dbPath || report.Paths.AgentHome != agentHome {
 		t.Fatalf("unexpected uninitialized report: %s", doctorJSON)
 	}
-	if report.Checks["ledger"].Status != "missing" || report.Checks["agent_identity"].Status != "missing" {
+	if report.Checks["ledger"].Status != "missing" || report.Checks["agent_identity"].Status != "missing" || report.Checks["agent_identity"].Code != "identity_uninitialized" {
 		t.Fatalf("missing state not diagnosed: %s", doctorJSON)
 	}
 	if _, err := os.Stat(root); !errors.Is(err, os.ErrNotExist) {
@@ -309,13 +313,14 @@ func TestDoctorJSONValidatesReadyState(t *testing.T) {
 		Status string `json:"status"`
 		Checks map[string]struct {
 			Status string            `json:"status"`
+			Code   string            `json:"code"`
 			Data   map[string]string `json:"data"`
 		} `json:"checks"`
 	}
 	if err := json.Unmarshal([]byte(doctorJSON), &report); err != nil {
 		t.Fatal(err)
 	}
-	if report.Checks["ledger"].Status != "pass" || report.Checks["agent_identity"].Status != "pass" || report.Checks["agent_identity"].Data["agent_id"] == "" {
+	if report.Checks["ledger"].Status != "pass" || report.Checks["agent_identity"].Status != "pass" || report.Checks["agent_identity"].Code != "identity_ready" || report.Checks["agent_identity"].Data["agent_id"] == "" {
 		t.Fatalf("ready state not validated: %s", doctorJSON)
 	}
 	if runtime.GOOS == "windows" {
@@ -324,6 +329,78 @@ func TestDoctorJSONValidatesReadyState(t *testing.T) {
 		}
 	} else if report.Status != "ready" || report.Checks["platform"].Status != "pass" || report.Checks["ledger_permissions"].Status != "pass" {
 		t.Fatalf("ready report incorrect: %s", doctorJSON)
+	}
+}
+
+func TestDoctorJSONReportsLostPrivateKeyWithoutReplacingIt(t *testing.T) {
+	root := t.TempDir()
+	dbPath := filepath.Join(root, "chainproof.db")
+	agentHome := filepath.Join(root, "agents")
+	t.Setenv("CHAINPROOF_DB", dbPath)
+	t.Setenv("CHAINPROOF_AGENT_HOME", agentHome)
+	t.Setenv("CHAINPROOF_AGENT_PROFILE", "doctor-agent")
+	t.Setenv("CHAINPROOF_CODEX_DISABLED", "1")
+	captureStdout(t, func() error { return run([]string{"init", "--json"}) })
+	keyPath := filepath.Join(agentHome, "doctor-agent", "identity.key")
+	if err := os.Remove(keyPath); err != nil {
+		t.Fatal(err)
+	}
+
+	doctorJSON := captureStdout(t, func() error { return run([]string{"doctor", "--json"}) })
+	var report struct {
+		Status string `json:"status"`
+		Checks map[string]struct {
+			Status  string `json:"status"`
+			Code    string `json:"code"`
+			Message string `json:"message"`
+		} `json:"checks"`
+	}
+	if err := json.Unmarshal([]byte(doctorJSON), &report); err != nil {
+		t.Fatal(err)
+	}
+	identityCheck := report.Checks["agent_identity"]
+	if report.Status != "attention" || identityCheck.Status != "fail" || identityCheck.Code != "identity_incomplete" || !strings.Contains(identityCheck.Message, "private key is missing") {
+		t.Fatalf("lost key not diagnosed as identity failure: %s", doctorJSON)
+	}
+	if _, err := os.Stat(keyPath); !errors.Is(err, os.ErrNotExist) {
+		t.Fatalf("doctor changed missing private key: %v", err)
+	}
+}
+
+func TestDoctorJSONReportsCorruptAgentProfile(t *testing.T) {
+	root := t.TempDir()
+	dbPath := filepath.Join(root, "chainproof.db")
+	agentHome := filepath.Join(root, "agents")
+	t.Setenv("CHAINPROOF_DB", dbPath)
+	t.Setenv("CHAINPROOF_AGENT_HOME", agentHome)
+	t.Setenv("CHAINPROOF_AGENT_PROFILE", "doctor-agent")
+	t.Setenv("CHAINPROOF_CODEX_DISABLED", "1")
+	captureStdout(t, func() error { return run([]string{"init", "--json"}) })
+	profilePath := filepath.Join(agentHome, "doctor-agent", "profile.json")
+	corrupt := []byte("{\n")
+	if err := os.WriteFile(profilePath, corrupt, 0600); err != nil {
+		t.Fatal(err)
+	}
+
+	doctorJSON := captureStdout(t, func() error { return run([]string{"doctor", "--json"}) })
+	var report struct {
+		Status string `json:"status"`
+		Checks map[string]struct {
+			Status  string `json:"status"`
+			Code    string `json:"code"`
+			Message string `json:"message"`
+		} `json:"checks"`
+	}
+	if err := json.Unmarshal([]byte(doctorJSON), &report); err != nil {
+		t.Fatal(err)
+	}
+	identityCheck := report.Checks["agent_identity"]
+	if report.Status != "attention" || identityCheck.Status != "fail" || identityCheck.Code != "identity_invalid" || !strings.Contains(identityCheck.Message, "read agent profile") {
+		t.Fatalf("corrupt profile not diagnosed as identity failure: %s", doctorJSON)
+	}
+	after, err := os.ReadFile(profilePath)
+	if err != nil || string(after) != string(corrupt) {
+		t.Fatalf("doctor changed corrupt profile: data=%q err=%v", after, err)
 	}
 }
 

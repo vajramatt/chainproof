@@ -97,6 +97,8 @@ func classifyCommandError(err error) (string, int) {
 	switch {
 	case errors.Is(err, flag.ErrHelp), strings.HasPrefix(message, "usage:"), strings.HasPrefix(message, "unknown command"), strings.Contains(message, "flag provided but not defined"):
 		return "usage", 2
+	case errors.Is(err, identity.ErrIncomplete):
+		return "identity_incomplete", 1
 	case strings.Contains(message, "verification failed"):
 		return "verification_failed", 3
 	default:

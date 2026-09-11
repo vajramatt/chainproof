@@ -25,6 +25,7 @@ type doctorPaths struct {
 
 type doctorCheck struct {
 	Status  string            `json:"status"`
+	Code    string            `json:"code,omitempty"`
 	Message string            `json:"message"`
 	Data    map[string]string `json:"data,omitempty"`
 }
@@ -91,12 +92,15 @@ func inspectLocalState(dbPath string) doctorReport {
 	profile, identityErr := identity.Verify(agentHome, profileName)
 	switch {
 	case errors.Is(identityErr, os.ErrNotExist):
-		checks["agent_identity"] = doctorCheck{Status: "missing", Message: "agent profile or private key is not initialized"}
+		checks["agent_identity"] = doctorCheck{Status: "missing", Code: "identity_uninitialized", Message: "agent profile and private key are not initialized"}
+	case errors.Is(identityErr, identity.ErrIncomplete):
+		checks["agent_identity"] = doctorCheck{Status: "fail", Code: "identity_incomplete", Message: identityErr.Error()}
 	case identityErr != nil:
-		checks["agent_identity"] = doctorCheck{Status: "fail", Message: identityErr.Error()}
+		checks["agent_identity"] = doctorCheck{Status: "fail", Code: "identity_invalid", Message: identityErr.Error()}
 	default:
 		checks["agent_identity"] = doctorCheck{
 			Status:  "pass",
+			Code:    "identity_ready",
 			Message: "agent profile and private key match",
 			Data: map[string]string{
 				"agent_id":     profile.AgentID,

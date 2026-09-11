@@ -2,6 +2,7 @@ package identity
 
 import (
 	"encoding/json"
+	"errors"
 	"os"
 	"path/filepath"
 	"runtime"
@@ -146,6 +147,149 @@ func TestVerifyRequiresMatchingPrivateKey(t *testing.T) {
 	}
 	if _, err = Verify(root, "default"); err == nil || !strings.Contains(err.Error(), "does not match") {
 		t.Fatalf("mismatched private key verified: %v", err)
+	}
+}
+
+func TestEnsureDoesNotReplaceMissingPrivateKey(t *testing.T) {
+	root := t.TempDir()
+	before, err := Ensure(root, "default", "Primary", "codex")
+	if err != nil {
+		t.Fatal(err)
+	}
+	keyPath := filepath.Join(root, "default", "identity.key")
+	if err = os.Remove(keyPath); err != nil {
+		t.Fatal(err)
+	}
+
+	if _, err = Ensure(root, "default", "Replacement", "codex"); !errors.Is(err, ErrIncomplete) || !strings.Contains(err.Error(), "private key is missing") {
+		t.Fatalf("missing private key was not rejected as incomplete identity: %v", err)
+	}
+	if _, err = os.Stat(keyPath); !errors.Is(err, os.ErrNotExist) {
+		t.Fatalf("ensure replaced missing private key: %v", err)
+	}
+	after, err := Load(root, "default")
+	if err != nil {
+		t.Fatal(err)
+	}
+	if after != before {
+		t.Fatalf("ensure changed profile after key loss:\nbefore: %+v\nafter:  %+v", before, after)
+	}
+}
+
+func TestVerifyDistinguishesIncompleteIdentityFromUninitialized(t *testing.T) {
+	root := t.TempDir()
+	if _, err := Verify(root, "default"); !errors.Is(err, os.ErrNotExist) || errors.Is(err, ErrIncomplete) {
+		t.Fatalf("absent identity status = %v, want not-exist only", err)
+	}
+	if _, err := Ensure(root, "default", "Primary", "codex"); err != nil {
+		t.Fatal(err)
+	}
+	if err := os.Remove(filepath.Join(root, "default", "profile.json")); err != nil {
+		t.Fatal(err)
+	}
+	if _, err := Verify(root, "default"); !errors.Is(err, ErrIncomplete) || !strings.Contains(err.Error(), "profile is missing") {
+		t.Fatalf("missing profile was not diagnosed as incomplete identity: %v", err)
+	}
+}
+
+func TestEnsureDoesNotRecreateMissingProfile(t *testing.T) {
+	root := t.TempDir()
+	if _, err := Ensure(root, "default", "Primary", "codex"); err != nil {
+		t.Fatal(err)
+	}
+	keyPath := filepath.Join(root, "default", "identity.key")
+	keyBefore, err := os.ReadFile(keyPath)
+	if err != nil {
+		t.Fatal(err)
+	}
+	profilePath := filepath.Join(root, "default", "profile.json")
+	if err = os.Remove(profilePath); err != nil {
+		t.Fatal(err)
+	}
+
+	if _, err = Ensure(root, "default", "Replacement", "codex"); !errors.Is(err, ErrIncomplete) || !strings.Contains(err.Error(), "profile is missing") {
+		t.Fatalf("missing profile was not rejected as incomplete identity: %v", err)
+	}
+	if _, err = os.Stat(profilePath); !errors.Is(err, os.ErrNotExist) {
+		t.Fatalf("ensure recreated missing profile: %v", err)
+	}
+	keyAfter, err := os.ReadFile(keyPath)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if string(keyAfter) != string(keyBefore) {
+		t.Fatal("ensure changed private key after profile loss")
+	}
+}
+
+func TestEnsureDoesNotModifyCorruptIdentityMaterial(t *testing.T) {
+	tests := []struct {
+		name   string
+		mutate func(t *testing.T, root, profilePath, keyPath string)
+	}{
+		{
+			name: "corrupt profile",
+			mutate: func(t *testing.T, _, profilePath, _ string) {
+				t.Helper()
+				if err := os.WriteFile(profilePath, []byte("{\n"), 0600); err != nil {
+					t.Fatal(err)
+				}
+			},
+		},
+		{
+			name: "corrupt private key",
+			mutate: func(t *testing.T, _, _, keyPath string) {
+				t.Helper()
+				if err := os.WriteFile(keyPath, []byte("{\n"), 0600); err != nil {
+					t.Fatal(err)
+				}
+			},
+		},
+		{
+			name: "mismatched private key",
+			mutate: func(t *testing.T, root, _, keyPath string) {
+				t.Helper()
+				otherRoot := filepath.Join(root, "other")
+				if _, err := Ensure(otherRoot, "other", "Other", "codex"); err != nil {
+					t.Fatal(err)
+				}
+				otherKey, err := os.ReadFile(filepath.Join(otherRoot, "other", "identity.key"))
+				if err != nil {
+					t.Fatal(err)
+				}
+				if err = os.WriteFile(keyPath, otherKey, 0600); err != nil {
+					t.Fatal(err)
+				}
+			},
+		},
+	}
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			root := t.TempDir()
+			if _, err := Ensure(root, "default", "Primary", "codex"); err != nil {
+				t.Fatal(err)
+			}
+			profilePath := filepath.Join(root, "default", "profile.json")
+			keyPath := filepath.Join(root, "default", "identity.key")
+			tt.mutate(t, root, profilePath, keyPath)
+			profileBefore, err := os.ReadFile(profilePath)
+			if err != nil {
+				t.Fatal(err)
+			}
+			keyBefore, err := os.ReadFile(keyPath)
+			if err != nil {
+				t.Fatal(err)
+			}
+
+			if _, err = Ensure(root, "default", "Replacement", "codex"); err == nil {
+				t.Fatal("corrupt identity was accepted")
+			}
+			profileAfter, profileErr := os.ReadFile(profilePath)
+			keyAfter, keyErr := os.ReadFile(keyPath)
+			if profileErr != nil || keyErr != nil || string(profileAfter) != string(profileBefore) || string(keyAfter) != string(keyBefore) {
+				t.Fatalf("ensure modified corrupt identity: profile_err=%v key_err=%v", profileErr, keyErr)
+			}
+		})
 	}
 }
 

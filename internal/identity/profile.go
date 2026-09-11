@@ -25,6 +25,10 @@ const (
 var profileNamePattern = regexp.MustCompile(`^[A-Za-z0-9][A-Za-z0-9._-]{0,63}$`)
 var workerIDPattern = regexp.MustCompile(`^worker:[0-9a-f]{32}$`)
 
+// ErrIncomplete means only part of an established identity remains. Callers
+// must not repair this state by silently generating replacement material.
+var ErrIncomplete = errors.New("agent identity is incomplete")
+
 // Profile contains public attribution material. Private key material never
 // appears in this type or command output.
 type Profile struct {
@@ -57,15 +61,22 @@ func Ensure(root, profileName, displayName, harness string) (Profile, error) {
 		return Profile{}, err
 	}
 
-	privateKey, err := loadOrCreatePrivateKey(filepath.Join(dir, "identity.key"))
-	if err != nil {
-		return Profile{}, err
-	}
 	profilePath := filepath.Join(dir, "profile.json")
+	keyPath := filepath.Join(dir, "identity.key")
 	profile, err := Load(root, profileName)
 	if err == nil {
+		privateKey, keyErr := loadPrivateKey(keyPath)
+		if errors.Is(keyErr, os.ErrNotExist) {
+			return Profile{}, fmt.Errorf("%w: private key is missing for existing profile %q", ErrIncomplete, profileName)
+		}
+		if keyErr != nil {
+			return Profile{}, keyErr
+		}
 		if !publicKeysEqual(profile.PublicKey, privateKey.Public().(ed25519.PublicKey)) {
 			return Profile{}, errors.New("agent profile public key does not match private key")
+		}
+		if err = os.Chmod(keyPath, 0600); err != nil {
+			return Profile{}, err
 		}
 		if err = os.Chmod(profilePath, 0600); err != nil {
 			return Profile{}, err
@@ -73,6 +84,27 @@ func Ensure(root, profileName, displayName, harness string) (Profile, error) {
 		return profile, nil
 	}
 	if !errors.Is(err, os.ErrNotExist) {
+		return Profile{}, err
+	}
+	if _, keyErr := os.Stat(keyPath); keyErr == nil {
+		// Another initializer can briefly publish the key before the profile.
+		// Give that bounded race time to converge, but never reconstruct a
+		// persistently missing profile without an explicit recovery workflow.
+		for range 50 {
+			time.Sleep(10 * time.Millisecond)
+			if profile, err = Load(root, profileName); err == nil {
+				return Ensure(root, profileName, displayName, harness)
+			} else if !errors.Is(err, os.ErrNotExist) {
+				return Profile{}, err
+			}
+		}
+		return Profile{}, fmt.Errorf("%w: profile is missing for existing private key %q", ErrIncomplete, profileName)
+	} else if !errors.Is(keyErr, os.ErrNotExist) {
+		return Profile{}, keyErr
+	}
+
+	privateKey, err := loadOrCreatePrivateKey(keyPath)
+	if err != nil {
 		return Profile{}, err
 	}
 
@@ -186,9 +218,20 @@ func Load(root, profileName string) (Profile, error) {
 func Verify(root, profileName string) (Profile, error) {
 	profile, err := Load(root, profileName)
 	if err != nil {
+		if errors.Is(err, os.ErrNotExist) {
+			keyPath := filepath.Join(root, profileName, "identity.key")
+			if _, keyErr := os.Stat(keyPath); keyErr == nil {
+				return Profile{}, fmt.Errorf("%w: profile is missing for existing private key %q", ErrIncomplete, profileName)
+			} else if !errors.Is(keyErr, os.ErrNotExist) {
+				return Profile{}, keyErr
+			}
+		}
 		return Profile{}, err
 	}
 	privateKey, err := loadPrivateKey(filepath.Join(root, profileName, "identity.key"))
+	if errors.Is(err, os.ErrNotExist) {
+		return Profile{}, fmt.Errorf("%w: private key is missing for existing profile %q", ErrIncomplete, profileName)
+	}
 	if err != nil {
 		return Profile{}, err
 	}

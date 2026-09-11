@@ -70,10 +70,18 @@ missing state. Report fields:
 - `checks`: named results for `platform`, `ledger`, `ledger_permissions`,
   `agent_identity`, and `loopback_api`
 
+`agent_identity.code` is stable for autonomous branching:
+
+- `identity_uninitialized`: both identity files are absent
+- `identity_ready`: profile is valid and matching key is present
+- `identity_incomplete`: exactly one established identity file is absent
+- `identity_invalid`: material is unreadable, corrupt, or mismatched
+
 Check status values:
 
 - `pass`: check succeeded
-- `missing`: initialization or identity material is absent
+- `missing`: both profile and private key are absent, so identity is
+  uninitialized
 - `warn`: usable state violates a recommended safety condition
 - `fail`: corruption, mismatch, unsupported platform, or unreadable state
 - `inactive`: optional runtime component is stopped
@@ -81,7 +89,9 @@ Check status values:
 
 Ledger diagnosis opens SQLite read-only, runs `PRAGMA quick_check`, and confirms
 core ChainProof tables. Identity diagnosis validates public profile fingerprint
-and confirms matching local private key without creating either file. Stopped
+and confirms matching local private key without creating either file. A lone
+profile, lone key, corrupt file, or key mismatch reports `fail`; diagnostics
+and later `ensure` calls do not generate replacement identity material. Stopped
 loopback API reports `inactive` and does not make otherwise healthy state fail.
 
 Doctor health is data rather than command failure. Consumers must treat report
@@ -110,6 +120,8 @@ Stable exit classes:
 
 - `0`: command executed and produced its result
 - `1`, `command_failed`: command could not complete
+- `1`, `identity_incomplete`: one established identity file is missing; no
+  replacement was generated
 - `2`, `usage`: arguments or command name are invalid
 - `3`, `verification_failed`: proof verification rejected input
 

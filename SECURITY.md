@@ -96,6 +96,12 @@ Current records are not signed and do not prove private-key possession. Mission
 leases coordinate cooperative workers; they are not identity or authorization
 proof.
 
+Identity bootstrap creates a profile and private key only when both are absent.
+If one established file is missing, or either file is corrupt or mismatched,
+ChainProof reports failure and does not silently replace or reconstruct it.
+Version 1 has no automatic key recovery: protect profile directories in backups
+and use a deliberately new profile when recovery is impossible.
+
 ## Installation and updates
 
 Release installer downloads archive and `checksums.txt` from same GitHub

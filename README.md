@@ -113,9 +113,10 @@ explorer, and loopback API. Broader unattended use needs these release gates:
    complete verifiable event chains; serialize checkpoints plus claim, acquire,
    renew, release, and handoff; reclaim expired leases with one winner; and
    recover cleanly after forced termination during an uncommitted event or
-   checkpoint. Custom service state also persists across login. Corrupted
-   profiles, lost keys, upgrades, and backup/restore still need deeper failure
-   testing.
+   checkpoint. Custom service state also persists across login. Identity
+   failure tests cover corrupt profiles, corrupt or mismatched keys, and either
+   identity file going missing without silent replacement. Upgrades and
+   backup/restore still need deeper failure testing.
 3. **Clean-install verification.** Exercise release archives, checksums,
    installer, first-run profile creation, service setup, TUI, loopback web
    explorer, and uninstall behavior on clean supported macOS and Linux systems.
@@ -301,6 +302,13 @@ profile, so `chainproof whoami` also works on a fresh install. Use
 `CHAINPROOF_AGENT_PROFILE` when several agents share one ledger. Use
 `CHAINPROOF_AGENT_HOME` only when profile files must live somewhere other than
 beside the database.
+
+Identity initialization occurs only when both profile and private key are
+absent. If either established file is missing, corrupt, or mismatched,
+ChainProof fails closed and leaves both paths unchanged. Run
+`chainproof doctor --json` to distinguish fresh state from damaged identity.
+There is no automatic key recovery or identity rotation in v1; restore lost
+material from a protected backup or deliberately choose a new profile.
 
 Identity data is recorded under `chainproof.agent.v1` in mission and run
 metadata plus hashed event and checkpoint extensions. Run verification checks
