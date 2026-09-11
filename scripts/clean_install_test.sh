@@ -91,6 +91,7 @@ chmod 0755 "$test_root/fakebin/curl" "$test_root/fakebin/launchctl" "$test_root/
 
 real_curl=$(command -v curl)
 export HOME="$test_root/home"
+export XDG_CONFIG_HOME="$HOME/.config"
 export TMPDIR="$test_root/work"
 export BINDIR="$test_root/home/.local/bin"
 export CHAINPROOF_VERSION="$version"
