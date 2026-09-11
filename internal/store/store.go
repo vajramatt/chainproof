@@ -17,8 +17,13 @@ import (
 	"github.com/google/uuid"
 	"github.com/vajramatt/chainproof/internal/identity"
 	"github.com/vajramatt/chainproof/internal/proof"
-	_ "modernc.org/sqlite"
+	"modernc.org/sqlite"
+	sqlite3 "modernc.org/sqlite/lib"
 )
+
+const maxWriteAttempts = 10
+
+var errConcurrentAppend = errors.New("concurrent append detected")
 
 type Store struct {
 	db       *sql.DB
@@ -31,7 +36,7 @@ func Open(path string) (*Store, error) {
 		return nil, err
 	}
 	db.SetMaxOpenConns(1)
-	if _, err = db.Exec(`PRAGMA journal_mode=WAL; PRAGMA foreign_keys=ON;
+	if _, err = db.Exec(`PRAGMA busy_timeout=1000; PRAGMA journal_mode=WAL; PRAGMA foreign_keys=ON;
 	CREATE TABLE IF NOT EXISTS runs(run_id TEXT PRIMARY KEY,agent TEXT NOT NULL,harness TEXT NOT NULL,model TEXT NOT NULL,status TEXT NOT NULL,started_at TEXT NOT NULL,completed_at TEXT,entry_count INTEGER NOT NULL,chain_head TEXT NOT NULL,metadata TEXT NOT NULL);
 	CREATE TABLE IF NOT EXISTS events(event_id TEXT PRIMARY KEY,run_id TEXT NOT NULL REFERENCES runs(run_id),sequence INTEGER NOT NULL,timestamp TEXT NOT NULL,kind TEXT NOT NULL,collection_mode TEXT NOT NULL,event_json TEXT NOT NULL,event_hash TEXT NOT NULL,UNIQUE(run_id,sequence));
 		CREATE TABLE IF NOT EXISTS import_cursors(adapter TEXT NOT NULL,source TEXT NOT NULL,cursor TEXT NOT NULL,updated_at TEXT NOT NULL,PRIMARY KEY(adapter,source));
@@ -121,6 +126,23 @@ func (s *Store) Start(ctx context.Context, agent, harness, model string, metadat
 }
 
 func (s *Store) Append(ctx context.Context, runID string, input proof.EventInput) (proof.Event, error) {
+	var event proof.Event
+	var err error
+	var lastErr error
+	for attempt := 0; attempt < maxWriteAttempts; attempt++ {
+		event, err = s.appendOnce(ctx, runID, input)
+		if err == nil || !isAppendContention(err) {
+			return event, err
+		}
+		lastErr = err
+		if err = waitForWriteRetry(ctx, attempt); err != nil {
+			return proof.Event{}, err
+		}
+	}
+	return proof.Event{}, fmt.Errorf("append contention retries exhausted: %w", lastErr)
+}
+
+func (s *Store) appendOnce(ctx context.Context, runID string, input proof.EventInput) (proof.Event, error) {
 	tx, err := s.db.BeginTx(ctx, nil)
 	if err != nil {
 		return proof.Event{}, err
@@ -199,13 +221,46 @@ func (s *Store) Append(ctx context.Context, runID string, input proof.EventInput
 	}
 	changed, _ := result.RowsAffected()
 	if changed != 1 {
-		return proof.Event{}, errors.New("concurrent append detected")
+		return proof.Event{}, errConcurrentAppend
 	}
 	if err = tx.Commit(); err != nil {
 		return proof.Event{}, err
 	}
 	event.EventHash = hash
 	return event, nil
+}
+
+func isAppendContention(err error) bool {
+	if errors.Is(err, errConcurrentAppend) || isSQLiteContention(err) {
+		return true
+	}
+	return isSQLiteUniqueConstraint(err, "events.run_id, events.sequence")
+}
+
+func isSQLiteContention(err error) bool {
+	var sqliteErr *sqlite.Error
+	if !errors.As(err, &sqliteErr) {
+		return false
+	}
+	primaryCode := sqliteErr.Code() & 0xff
+	return primaryCode == sqlite3.SQLITE_BUSY || primaryCode == sqlite3.SQLITE_LOCKED
+}
+
+func isSQLiteUniqueConstraint(err error, columns string) bool {
+	var sqliteErr *sqlite.Error
+	return errors.As(err, &sqliteErr) && sqliteErr.Code() == sqlite3.SQLITE_CONSTRAINT_UNIQUE && strings.Contains(sqliteErr.Error(), columns)
+}
+
+func waitForWriteRetry(ctx context.Context, attempt int) error {
+	delay := time.Millisecond << min(attempt, 5)
+	timer := time.NewTimer(delay)
+	defer timer.Stop()
+	select {
+	case <-ctx.Done():
+		return ctx.Err()
+	case <-timer.C:
+		return nil
+	}
 }
 
 func (s *Store) MarkIdle(ctx context.Context, runID string) error {

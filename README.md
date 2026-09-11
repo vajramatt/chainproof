@@ -107,12 +107,14 @@ explorer, and loopback API. Broader unattended use needs these release gates:
    exit classes. An agent can discover installed features, create or load
    identity, inspect available work, and diagnose its environment without
    parsing prose.
-2. **Process and failure hardening.** Test independent OS processes sharing one
-   database, WAL recovery after forced termination, interrupted checkpoints,
-   expired leases, corrupted profiles, lost keys, database upgrades, and
-   backup/restore. Current `main` preserves resolved custom ledger, identity,
-   and collector paths in installed user services. Existing goroutine coverage
-   is necessary but not sufficient for autonomous multi-agent operation.
+2. **Process and failure hardening.** Current `main` tests independent OS
+   processes concurrently appending, claiming, and acquiring against one WAL
+   database. Bounded transaction retries preserve complete verifiable event
+   chains, return one semantic mission winner, and recover cleanly after forced
+   termination with an uncommitted write. Custom service state also persists
+   across login. Interrupted checkpoints, expired leases across processes,
+   corrupted profiles, lost keys, upgrades, and backup/restore still need
+   deeper failure testing.
 3. **Clean-install verification.** Exercise release archives, checksums,
    installer, first-run profile creation, service setup, TUI, loopback web
    explorer, and uninstall behavior on clean supported macOS and Linux systems.
@@ -651,8 +653,11 @@ is still an imported chain.
 ## Local, by design
 
 ChainProof stores runs, canonical events, adapter cursors, and artifacts in a
-local SQLite database using WAL mode and serialized writes. Artifact hashes are
-computed over raw bytes—not decoded text—and content-addressed by SHA-256.
+local SQLite database using WAL mode and serialized writes. Bounded retries
+around whole append and mission-acquisition transactions resolve independent
+process contention from fresh state instead of leaking raw lock errors.
+Artifact hashes are computed over raw bytes—not decoded text—and
+content-addressed by SHA-256.
 
 The web server accepts only loopback listen addresses and defaults to
 `127.0.0.1:7331`. It also rejects non-local host headers. ChainProof

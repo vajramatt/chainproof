@@ -776,7 +776,7 @@ func capabilityDocument(dbPath string) any {
 			"continuity":     "chainproof.continuity.bundle.v1",
 			"provenance":     "chainproof.bundle.v1",
 		},
-		Features: []string{"agent_identity", "artifact_store", "codex_collector", "codex_work", "continuity_proofs", "integration_pull", "integration_push", "local_api", "machine_readable_doctor", "machine_readable_init", "mission_leases", "mission_recovery", "missions", "process_wrap", "provenance_proofs", "search", "stable_exit_codes", "structured_errors", "tui", "web_explorer"},
+		Features: []string{"agent_identity", "artifact_store", "codex_collector", "codex_work", "continuity_proofs", "independent_process_coordination", "integration_pull", "integration_push", "local_api", "machine_readable_doctor", "machine_readable_init", "mission_leases", "mission_recovery", "missions", "process_wrap", "provenance_proofs", "search", "stable_exit_codes", "structured_errors", "tui", "web_explorer"},
 	}
 }
 

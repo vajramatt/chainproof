@@ -20,6 +20,22 @@ func (s *Store) ClaimMission(ctx context.Context, missionID string, input contin
 	if err != nil {
 		return continuity.MissionLease{}, err
 	}
+	var lease continuity.MissionLease
+	var lastErr error
+	for attempt := 0; attempt < maxWriteAttempts; attempt++ {
+		lease, err = s.claimMissionOnce(ctx, missionID, holder, ttl)
+		if err == nil || !isLeaseContention(err) {
+			return lease, err
+		}
+		lastErr = err
+		if err = waitForWriteRetry(ctx, attempt); err != nil {
+			return continuity.MissionLease{}, err
+		}
+	}
+	return continuity.MissionLease{}, fmt.Errorf("mission claim contention retries exhausted: %w", lastErr)
+}
+
+func (s *Store) claimMissionOnce(ctx context.Context, missionID, holder string, ttl time.Duration) (continuity.MissionLease, error) {
 	tx, err := s.db.BeginTx(ctx, nil)
 	if err != nil {
 		return continuity.MissionLease{}, err
@@ -63,35 +79,76 @@ func (s *Store) ClaimMission(ctx context.Context, missionID string, input contin
 	return lease, nil
 }
 
+func isLeaseContention(err error) bool {
+	if isSQLiteContention(err) {
+		return true
+	}
+	return isSQLiteUniqueConstraint(err, "mission_lease_events.mission_id, mission_lease_events.sequence")
+}
+
 func (s *Store) AcquireMission(ctx context.Context, input continuity.LeaseInput, maxEvidence int) (continuity.MissionAcquisition, error) {
 	holder, ttl, err := validatedLeaseInput(input)
 	if err != nil {
 		return continuity.MissionAcquisition{}, err
 	}
+	var selected continuity.Mission
+	var lease continuity.MissionLease
+	var lastErr error
+	acquired := false
+	for attempt := 0; attempt < maxWriteAttempts; attempt++ {
+		selected, lease, err = s.acquireMissionLeaseOnce(ctx, holder, ttl)
+		if err == nil {
+			acquired = true
+			break
+		}
+		if !isLeaseContention(err) {
+			return continuity.MissionAcquisition{}, err
+		}
+		lastErr = err
+		if err = waitForWriteRetry(ctx, attempt); err != nil {
+			return continuity.MissionAcquisition{}, err
+		}
+	}
+	if !acquired {
+		return continuity.MissionAcquisition{}, fmt.Errorf("mission acquisition contention retries exhausted: %w", lastErr)
+	}
+	compiled, err := s.BuildMissionContext(ctx, selected.ID, maxEvidence)
+	if err != nil {
+		_, _ = s.ReleaseMission(ctx, selected.ID, lease.LeaseID)
+		return continuity.MissionAcquisition{}, fmt.Errorf("acquired mission context failed: %w", err)
+	}
+	if !compiled.LeaseActive || compiled.Lease == nil || compiled.Lease.LeaseID != lease.LeaseID {
+		_, _ = s.ReleaseMission(ctx, selected.ID, lease.LeaseID)
+		return continuity.MissionAcquisition{}, errors.New("mission lease expired before context was ready")
+	}
+	return continuity.MissionAcquisition{Mission: selected, Lease: lease, Context: compiled}, nil
+}
+
+func (s *Store) acquireMissionLeaseOnce(ctx context.Context, holder string, ttl time.Duration) (continuity.Mission, continuity.MissionLease, error) {
 	tx, err := s.db.BeginTx(ctx, nil)
 	if err != nil {
-		return continuity.MissionAcquisition{}, err
+		return continuity.Mission{}, continuity.MissionLease{}, err
 	}
 	defer tx.Rollback()
 	rows, err := tx.QueryContext(ctx, `SELECT mission_id,agent,objective,status,created_at,updated_at,checkpoint_count,chain_head,metadata FROM missions WHERE status='active' ORDER BY `+missionOldestOrder)
 	if err != nil {
-		return continuity.MissionAcquisition{}, err
+		return continuity.Mission{}, continuity.MissionLease{}, err
 	}
 	missions := []continuity.Mission{}
 	for rows.Next() {
 		mission, scanErr := scanMission(rows)
 		if scanErr != nil {
 			rows.Close()
-			return continuity.MissionAcquisition{}, scanErr
+			return continuity.Mission{}, continuity.MissionLease{}, scanErr
 		}
 		missions = append(missions, mission)
 	}
 	if err = rows.Err(); err != nil {
 		rows.Close()
-		return continuity.MissionAcquisition{}, err
+		return continuity.Mission{}, continuity.MissionLease{}, err
 	}
 	if err = rows.Close(); err != nil {
-		return continuity.MissionAcquisition{}, err
+		return continuity.Mission{}, continuity.MissionLease{}, err
 	}
 	now := s.leaseNow().UTC()
 	var selected continuity.Mission
@@ -100,13 +157,13 @@ func (s *Store) AcquireMission(ctx context.Context, input continuity.LeaseInput,
 	for _, mission := range missions {
 		candidatePrevious, found, leaseErr := latestMissionLease(ctx, tx, mission.ID)
 		if leaseErr != nil {
-			return continuity.MissionAcquisition{}, leaseErr
+			return continuity.Mission{}, continuity.MissionLease{}, leaseErr
 		}
 		if found && candidatePrevious.Action != "released" && candidatePrevious.ExpiresAt.After(now) {
 			continue
 		}
 		if verifyErr := verifyMissionContinuityTx(ctx, tx, mission); verifyErr != nil {
-			return continuity.MissionAcquisition{}, fmt.Errorf("mission %s cannot be acquired: %w", mission.ID, verifyErr)
+			return continuity.Mission{}, continuity.MissionLease{}, fmt.Errorf("mission %s cannot be acquired: %w", mission.ID, verifyErr)
 		}
 		selected = mission
 		previous = candidatePrevious
@@ -114,7 +171,7 @@ func (s *Store) AcquireMission(ctx context.Context, input continuity.LeaseInput,
 		break
 	}
 	if selected.ID == "" {
-		return continuity.MissionAcquisition{}, errors.New("no available mission")
+		return continuity.Mission{}, continuity.MissionLease{}, errors.New("no available mission")
 	}
 	sequence := 0
 	previousLeaseID := ""
@@ -128,30 +185,21 @@ func (s *Store) AcquireMission(ctx context.Context, input continuity.LeaseInput,
 		Timestamp: now, ExpiresAt: now.Add(ttl),
 	}
 	if err = insertMissionLease(ctx, tx, lease); err != nil {
-		return continuity.MissionAcquisition{}, err
+		return continuity.Mission{}, continuity.MissionLease{}, err
 	}
 	result, err := tx.ExecContext(ctx, `UPDATE missions SET updated_at=? WHERE mission_id=? AND status='active'`, now.Format(time.RFC3339Nano), selected.ID)
 	if err != nil {
-		return continuity.MissionAcquisition{}, err
+		return continuity.Mission{}, continuity.MissionLease{}, err
 	}
 	changed, _ := result.RowsAffected()
 	if changed != 1 {
-		return continuity.MissionAcquisition{}, errors.New("no available mission")
+		return continuity.Mission{}, continuity.MissionLease{}, errors.New("no available mission")
 	}
 	if err = tx.Commit(); err != nil {
-		return continuity.MissionAcquisition{}, err
+		return continuity.Mission{}, continuity.MissionLease{}, err
 	}
 	selected.UpdatedAt = now
-	compiled, err := s.BuildMissionContext(ctx, selected.ID, maxEvidence)
-	if err != nil {
-		_, _ = s.ReleaseMission(ctx, selected.ID, lease.LeaseID)
-		return continuity.MissionAcquisition{}, fmt.Errorf("acquired mission context failed: %w", err)
-	}
-	if !compiled.LeaseActive || compiled.Lease == nil || compiled.Lease.LeaseID != lease.LeaseID {
-		_, _ = s.ReleaseMission(ctx, selected.ID, lease.LeaseID)
-		return continuity.MissionAcquisition{}, errors.New("mission lease expired before context was ready")
-	}
-	return continuity.MissionAcquisition{Mission: selected, Lease: lease, Context: compiled}, nil
+	return selected, lease, nil
 }
 
 func validatedLeaseInput(input continuity.LeaseInput) (string, time.Duration, error) {

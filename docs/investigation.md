@@ -22,6 +22,13 @@ queries. Canonical events remain independently verifiable because proof bundles
 carry structured run and event records plus chain heads; verification does not
 require original database or running ChainProof instance.
 
+Current `main` exercises that claim with independent OS processes, not only
+goroutines. Concurrent appenders retry full transactions and retain every event
+in one valid chain. Concurrent mission claims and queue acquisitions produce one
+winner; contenders retry from fresh state and receive semantic ownership or
+queue results. A forced process kill with an uncommitted event is rolled back by
+SQLite WAL recovery, after which new events append and verify normally.
+
 Markdown is useful as generated mission context or human-readable summary, but
 is not suitable as canonical coordination state: parsing is ambiguous, atomic
 multi-agent updates are difficult, and schema evolution is fragile. Roadmap

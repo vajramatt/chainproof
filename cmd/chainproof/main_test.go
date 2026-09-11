@@ -181,7 +181,7 @@ func TestCapabilitiesJSONDescribesCurrentBuild(t *testing.T) {
 	if capabilities.Protocols["provenance"] != "chainproof.bundle.v1" || capabilities.Protocols["continuity"] != "chainproof.continuity.bundle.v1" || capabilities.Protocols["agent_work"] != "chainproof.agent-work.v1" || capabilities.Protocols["agent_identity"] != "chainproof.agent.v1" {
 		t.Fatalf("unexpected capability protocols: %s", capabilitiesJSON)
 	}
-	wantFeatures := []string{"agent_identity", "artifact_store", "codex_collector", "codex_work", "continuity_proofs", "integration_pull", "integration_push", "local_api", "machine_readable_doctor", "machine_readable_init", "mission_leases", "mission_recovery", "missions", "process_wrap", "provenance_proofs", "search", "stable_exit_codes", "structured_errors", "tui", "web_explorer"}
+	wantFeatures := []string{"agent_identity", "artifact_store", "codex_collector", "codex_work", "continuity_proofs", "independent_process_coordination", "integration_pull", "integration_push", "local_api", "machine_readable_doctor", "machine_readable_init", "mission_leases", "mission_recovery", "missions", "process_wrap", "provenance_proofs", "search", "stable_exit_codes", "structured_errors", "tui", "web_explorer"}
 	if !reflect.DeepEqual(capabilities.Features, wantFeatures) {
 		t.Fatalf("features = %v, want %v", capabilities.Features, wantFeatures)
 	}
