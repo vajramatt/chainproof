@@ -121,6 +121,26 @@ func classifyCommandError(err error) (string, int) {
 	}
 }
 
+// parseOnePositional parses flags that may appear before or after exactly one
+// positional argument.
+func parseOnePositional(fs *flag.FlagSet, args []string) (string, error) {
+	if err := fs.Parse(args); err != nil {
+		return "", err
+	}
+	rest := fs.Args()
+	if len(rest) == 0 {
+		return "", errors.New("missing argument")
+	}
+	positional := rest[0]
+	if err := fs.Parse(rest[1:]); err != nil {
+		return "", err
+	}
+	if fs.NArg() != 0 {
+		return "", errors.New("too many arguments")
+	}
+	return positional, nil
+}
+
 func commandFlagSet(name string) *flag.FlagSet {
 	fs := flag.NewFlagSet(name, flag.ContinueOnError)
 	fs.SetOutput(io.Discard)
@@ -188,10 +208,21 @@ func run(args []string) error {
 		return runDoctor(args[1:])
 	}
 	if args[0] == "verify-file" {
-		if len(args) < 2 {
-			return errors.New("usage: chainproof verify-file PROOF.json")
+		const usage = "usage: chainproof verify-file [--expect-head SHA256] [--expect-count N] PROOF.json"
+		fs := commandFlagSet("verify-file")
+		expectHead := fs.String("expect-head", "", "trusted chain head the bundle must end at")
+		expectCount := fs.Int("expect-count", -1, "trusted number of events the bundle must contain")
+		path, err := parseOnePositional(fs, args[1:])
+		if err != nil {
+			return errors.New(usage)
 		}
-		raw, err := os.ReadFile(args[1])
+		if *expectHead != "" && !proof.ValidHash(*expectHead) {
+			return errors.New("usage: --expect-head must be 64 lowercase hexadecimal characters")
+		}
+		if *expectCount < -1 {
+			return errors.New("usage: --expect-count must be zero or greater")
+		}
+		raw, err := os.ReadFile(path)
 		if err != nil {
 			return err
 		}
@@ -199,7 +230,7 @@ func run(args []string) error {
 		if err = proof.DecodeStrict(raw, &bundle); err != nil {
 			return err
 		}
-		verification := proof.VerifyBundle(bundle)
+		verification := proof.VerifyBundleExpect(bundle, proof.Expectation{ChainHead: *expectHead, EntryCount: *expectCount})
 		_ = output(verification, nil)
 		if !verification.Valid {
 			return errors.New("verification failed")
@@ -1514,7 +1545,8 @@ Usage:
   chainproof complete RUN_ID [STATUS]
   chainproof verify RUN_ID                   Verify the local ledger
   chainproof export RUN_ID [PROOF.json]      Export a portable proof
-  chainproof verify-file PROOF.json          Verify without a database
+  chainproof verify-file [--expect-head H] [--expect-count N] PROOF.json
+                                            Verify without a database
   chainproof verify-continuity-file PROOF.json
                                               Verify mission proof offline
   chainproof list

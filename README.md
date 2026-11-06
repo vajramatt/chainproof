@@ -728,6 +728,18 @@ chainproof export RUN_ID proof.json
 chainproof verify-file proof.json
 ```
 
+A bundle alone cannot reveal that trailing events were removed: a prefix with
+its own entry count and chain head is internally valid. When you hold a chain
+head from a trusted channel (a CI log, a signed release note, a checkpoint),
+pin it:
+
+```sh
+chainproof verify-file --expect-head CHAIN_HEAD --expect-count 42 proof.json
+```
+
+Mismatches fail with `expected_chain_head_mismatch` or
+`expected_entry_count_mismatch` and exit code 3.
+
 The verifier works on a clean machine because the proof bundle contains the
 run declaration and canonical events. Run declaration fields such as `agent`,
 `model`, `status`, timestamps, and `metadata.mission_id` are not hashed;
@@ -817,7 +829,7 @@ It does not edit the repositories or harness histories it observes.
 | `chainproof complete` | close a run with a terminal status |
 | `chainproof verify` | verify a run in the local ledger |
 | `chainproof export` | write a portable proof bundle |
-| `chainproof verify-file` | independently verify a bundle |
+| `chainproof verify-file` | independently verify a bundle; `--expect-head`/`--expect-count` pin a trusted head |
 | `chainproof checkpoint` | anchor resumable state to a run-proof prefix |
 | `chainproof resume` | verify and load the latest mission checkpoint |
 | `chainproof context` | compile bounded verified mission context for an agent |

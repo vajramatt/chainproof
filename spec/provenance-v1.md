@@ -60,7 +60,9 @@ Collection mode describes provenance quality; it is not a trust score.
 A verifier MUST check genesis, contiguous sequence numbers, run identity,
 previous-hash links, every event hash, declared entry count, and declared chain
 head. Verifying only the hashes present in a supplied suffix or prefix is not
-sufficient.
+sufficient. A bundle's declared head and count cannot reveal tail truncation;
+a verifier that holds a trusted head or count from outside the bundle SHOULD
+require the bundle to match it.
 
 ### Run declaration boundary
 

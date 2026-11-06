@@ -99,6 +99,10 @@ head verifier already trusts. If attacker can replace entire ledger and every
 external copy of chain head or bundle, local verification cannot establish
 which history came first. ChainProof currently provides no timestamp authority,
 external anchoring, transparency log, or signed release of individual records.
+Tail truncation is undetectable from a bundle alone: removing trailing events
+and re-declaring `entry_count` and `chain_head` yields a valid prefix. Pin a
+head obtained outside the bundle with `chainproof verify-file --expect-head
+HASH --expect-count N` when completeness matters.
 
 Proof bundles, continuity bundles, and workspace `continuity.json` are parsed
 strictly: duplicate keys, unknown or case-variant schema fields, non-canonical

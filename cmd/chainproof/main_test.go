@@ -1697,3 +1697,93 @@ func stringValueForTest(value any) string {
 	text, _ := value.(string)
 	return text
 }
+
+func runVerifyFile(t *testing.T, args ...string) (proof.Verification, error) {
+	t.Helper()
+	read, write, err := os.Pipe()
+	if err != nil {
+		t.Fatal(err)
+	}
+	original := os.Stdout
+	os.Stdout = write
+	runErr := run(append([]string{"verify-file"}, args...))
+	os.Stdout = original
+	write.Close()
+	body, _ := io.ReadAll(read)
+	read.Close()
+	var verification proof.Verification
+	if len(body) > 0 {
+		if err = json.Unmarshal(body, &verification); err != nil {
+			t.Fatalf("verify-file output is not JSON: %q", body)
+		}
+	}
+	return verification, runErr
+}
+
+func TestVerifyFilePinsTrustedHeadAndCount(t *testing.T) {
+	t.Setenv("CHAINPROOF_DB", filepath.Join(t.TempDir(), "chainproof.db"))
+	t.Setenv("CHAINPROOF_AGENT_HOME", filepath.Join(t.TempDir(), "agents"))
+	t.Setenv("CHAINPROOF_CODEX_DISABLED", "1")
+	var started proof.Run
+	if err := json.Unmarshal([]byte(captureStdout(t, func() error { return run([]string{"start", "--agent", "builder"}) })), &started); err != nil {
+		t.Fatal(err)
+	}
+	for _, kind := range []string{"first", "second"} {
+		captureStdout(t, func() error {
+			return run([]string{"append", started.ID, `{"kind":"` + kind + `","payload":{"n":12345678901234567891}}`})
+		})
+	}
+	dir := t.TempDir()
+	full := filepath.Join(dir, "proof.json")
+	captureStdout(t, func() error { return run([]string{"export", started.ID, full}) })
+	raw, err := os.ReadFile(full)
+	if err != nil {
+		t.Fatal(err)
+	}
+	var bundle proof.Bundle
+	if err = proof.DecodeStrict(raw, &bundle); err != nil {
+		t.Fatal(err)
+	}
+	head := bundle.Run.ChainHead
+
+	verification, err := runVerifyFile(t, "--expect-head", head, "--expect-count", "2", full)
+	if err != nil || !verification.Valid || len(verification.UnauthenticatedRunFields) == 0 {
+		t.Fatalf("pinned full bundle rejected: %+v %v", verification, err)
+	}
+	if verification, err = runVerifyFile(t, full, "--expect-count", "2"); err != nil || !verification.Valid {
+		t.Fatalf("flag after path rejected: %+v %v", verification, err)
+	}
+
+	// Drop the last event and re-declare the prefix: internally consistent.
+	bundle.Events = bundle.Events[:1]
+	bundle.Run.EntryCount, bundle.Run.ChainHead = 1, bundle.Events[0].EventHash
+	truncatedRaw, _ := json.MarshalIndent(bundle, "", "  ")
+	truncated := filepath.Join(dir, "truncated.json")
+	if err = os.WriteFile(truncated, truncatedRaw, 0600); err != nil {
+		t.Fatal(err)
+	}
+	if verification, err = runVerifyFile(t, truncated); err != nil || !verification.Valid {
+		t.Fatalf("unpinned truncated prefix should verify on its own: %+v %v", verification, err)
+	}
+	if verification, err = runVerifyFile(t, "--expect-head", head, truncated); err == nil || verification.Reason != "expected_chain_head_mismatch" {
+		t.Fatalf("head pin missed truncation: %+v %v", verification, err)
+	}
+	if verification, err = runVerifyFile(t, "--expect-count", "2", truncated); err == nil || verification.Reason != "expected_entry_count_mismatch" {
+		t.Fatalf("count pin missed truncation: %+v %v", verification, err)
+	}
+	if _, err = runVerifyFile(t, "--expect-head", "ABC", full); err == nil || !strings.HasPrefix(err.Error(), "usage:") {
+		t.Fatalf("invalid head accepted: %v", err)
+	}
+
+	forged := strings.Replace(string(raw), `"payload": {`, `"PAYLOAD": {"n": 1}, "payload": {`, 1)
+	if forged == string(raw) {
+		t.Fatal("forgery did not apply")
+	}
+	forgedPath := filepath.Join(dir, "forged.json")
+	if err = os.WriteFile(forgedPath, []byte(forged), 0600); err != nil {
+		t.Fatal(err)
+	}
+	if _, err = runVerifyFile(t, forgedPath); err == nil {
+		t.Fatal("case-variant duplicate payload accepted by verify-file")
+	}
+}

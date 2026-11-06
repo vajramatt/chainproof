@@ -53,3 +53,40 @@ func VerifyBundle(bundle Bundle) Verification {
 	}
 	return Verification{Valid: true, EntryCount: len(bundle.Events), ChainHead: previous, UnauthenticatedRunFields: UnauthenticatedRunFields()}
 }
+
+// Expectation pins a bundle to values the verifier already trusts from outside
+// the bundle. A bundle alone cannot reveal tail truncation: a valid prefix
+// with its own declared count and head verifies on its own.
+type Expectation struct {
+	ChainHead  string // empty means unpinned
+	EntryCount int    // negative means unpinned
+}
+
+// VerifyBundleExpect verifies bundle and then requires its chain to end at the
+// expected head and entry count when they are set.
+func VerifyBundleExpect(bundle Bundle, expect Expectation) Verification {
+	verification := VerifyBundle(bundle)
+	if !verification.Valid {
+		return verification
+	}
+	if expect.EntryCount >= 0 && verification.EntryCount != expect.EntryCount {
+		return Verification{Valid: false, Reason: "expected_entry_count_mismatch", EntryCount: verification.EntryCount, ChainHead: verification.ChainHead}
+	}
+	if expect.ChainHead != "" && verification.ChainHead != expect.ChainHead {
+		return Verification{Valid: false, Reason: "expected_chain_head_mismatch", EntryCount: verification.EntryCount, ChainHead: verification.ChainHead}
+	}
+	return verification
+}
+
+// ValidHash reports whether value is 64 lowercase hexadecimal characters.
+func ValidHash(value string) bool {
+	if len(value) != 64 {
+		return false
+	}
+	for _, c := range value {
+		if (c < '0' || c > '9') && (c < 'a' || c > 'f') {
+			return false
+		}
+	}
+	return true
+}
