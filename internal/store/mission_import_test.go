@@ -284,3 +284,68 @@ func missionImportFixture(t *testing.T) (*Store, continuity.Bundle) {
 	}
 	return source, bundle
 }
+
+func TestImportMissionRejectsUnsafeIdentifiers(t *testing.T) {
+	ctx := context.Background()
+	hostile := `x" onfocus="alert(1)`
+	forge := func(missionID, runID, eventID string) continuity.Bundle {
+		t.Helper()
+		now := time.Now().UTC()
+		event := proof.Event{SchemaVersion: "1", ID: eventID, RunID: runID, Sequence: 0, PreviousHash: proof.GenesisHash, Timestamp: now, Kind: "decision", Actor: proof.Actor{Type: "agent", Name: "builder"}, Source: proof.Source{Adapter: "test", Mode: "reported"}, Payload: map[string]any{}, Artifacts: []any{}, Extensions: map[string]any{}}
+		hash, err := proof.Hash(event)
+		if err != nil {
+			t.Fatal(err)
+		}
+		event.EventHash = hash
+		run := proof.Run{ID: runID, Agent: "builder", Status: "completed", StartedAt: now, EntryCount: 1, ChainHead: hash, Metadata: map[string]any{"mission_id": missionID}}
+		mission := continuity.Mission{ID: missionID, Agent: "builder", Objective: "Forged", Status: "active", CreatedAt: now, UpdatedAt: now, ChainHead: continuity.GenesisHash, Metadata: map[string]any{}}
+		checkpoint, err := continuity.NewCheckpoint(mission, 0, continuity.GenesisHash, now, continuity.CheckpointInput{Run: continuity.RunAnchor{RunID: runID, EntryCount: 1, ChainHead: hash}, Summary: "forged", Evidence: []continuity.EvidenceRef{{EventID: eventID}}})
+		if err != nil {
+			t.Fatal(err)
+		}
+		mission.CheckpointCount, mission.ChainHead = 1, checkpoint.CheckpointHash
+		bundle := continuity.Bundle{Format: "chainproof.continuity.bundle.v1", Mission: mission, Checkpoints: []continuity.Checkpoint{checkpoint}, RunProofs: []proof.Bundle{{Format: "chainproof.bundle.v1", Run: run, Events: []proof.Event{event}}}}
+		if verification := continuity.VerifyBundle(bundle); !verification.Valid {
+			t.Fatalf("forged fixture does not verify: %+v", verification)
+		}
+		return bundle
+	}
+	destination, err := Open(t.TempDir() + "/destination.db")
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer destination.Close()
+	if _, err = destination.ImportMission(ctx, forge("mission-safe", "run-safe", "event-safe")); err != nil {
+		t.Fatalf("safe identifiers rejected: %v", err)
+	}
+	for name, bundle := range map[string]continuity.Bundle{
+		"mission": forge(hostile, "run-a", "event-a"),
+		"run":     forge("mission-b", hostile, "event-b"),
+		"event":   forge("mission-c", "run-c", hostile),
+	} {
+		if _, err = destination.ImportMission(ctx, bundle); !errors.Is(err, ErrInvalidMissionImport) {
+			t.Errorf("unsafe %s ID imported: %v", name, err)
+		}
+	}
+}
+
+func TestAppendRejectsUnsafeEventID(t *testing.T) {
+	ctx := context.Background()
+	db, err := Open(t.TempDir() + "/test.db")
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer db.Close()
+	run, err := db.Start(ctx, "builder", "test", "", nil)
+	if err != nil {
+		t.Fatal(err)
+	}
+	for _, id := range []string{`"><img src=x>`, "with space", "line\nbreak", "esc\x1b[2J"} {
+		if _, err = db.Append(ctx, run.ID, proof.EventInput{ID: id, Kind: "event"}); err == nil {
+			t.Errorf("unsafe event ID %q accepted", id)
+		}
+	}
+	if _, err = db.Append(ctx, run.ID, proof.EventInput{ID: "codex-0123abcd", Kind: "event"}); err != nil {
+		t.Fatalf("safe event ID rejected: %v", err)
+	}
+}

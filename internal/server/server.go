@@ -59,6 +59,7 @@ func New(db *store.Store, address string, status *Status) *Server {
 	mux.HandleFunc("GET /api/runs/{id}/verify", s.verify)
 	mux.HandleFunc("PUT /api/artifacts/{hash}", s.putArtifact)
 	mux.HandleFunc("GET /api/artifacts/{hash}", s.getArtifact)
+	mux.HandleFunc("GET /app.js", webScript)
 	mux.HandleFunc("GET /", web)
 	s.http = &http.Server{Addr: address, Handler: localhostOnly(sameOriginWrites(cors(mux)))}
 	return s
@@ -520,7 +521,7 @@ func isLoopbackHost(host string) bool {
 func cors(next http.Handler) http.Handler {
 	return http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
 		w.Header().Set("X-Content-Type-Options", "nosniff")
-		w.Header().Set("Content-Security-Policy", "default-src 'self'; style-src 'unsafe-inline'; script-src 'unsafe-inline'")
+		w.Header().Set("Content-Security-Policy", "default-src 'self'; script-src 'self'; style-src 'unsafe-inline'; object-src 'none'; base-uri 'none'; frame-ancestors 'none'")
 		next.ServeHTTP(w, r)
 	})
 }
@@ -529,5 +530,13 @@ func web(w http.ResponseWriter, _ *http.Request) {
 	io.WriteString(w, page)
 }
 
+func webScript(w http.ResponseWriter, _ *http.Request) {
+	w.Header().Set("Content-Type", "text/javascript; charset=utf-8")
+	io.WriteString(w, script)
+}
+
 //go:embed ui/index.html
 var page string
+
+//go:embed ui/app.js
+var script string

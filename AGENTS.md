@@ -12,8 +12,10 @@ formats, and release artifacts.
   here.
 - ChainProof is not a hosted SaaS product. Do not add accounts, billing,
   hosted storage, tenancy, or SaaS administration here.
-- `internal/server/ui/index.html` is the embedded, loopback-only web explorer
-  served by `chainproof serve`, not the marketing website.
+- `internal/server/ui/index.html` and `internal/server/ui/app.js` are the
+  embedded, loopback-only web explorer served by `chainproof serve`, not the
+  marketing website. Keep script in `app.js` (CSP is `script-src 'self'`) and
+  pass every interpolated value through `esc()` before it reaches `innerHTML`.
 
 ## Product invariants
 

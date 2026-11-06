@@ -97,7 +97,7 @@ func prepareMissionImport(bundle continuity.Bundle) (preparedMissionImport, erro
 		return preparedMissionImport{}, fmt.Errorf("%w: continuity verification failed: %s", ErrInvalidMissionImport, verification.Reason)
 	}
 	mission := bundle.Mission
-	if strings.TrimSpace(mission.ID) == "" || strings.TrimSpace(mission.Agent) == "" || strings.TrimSpace(mission.Objective) == "" || (mission.Status != "active" && mission.Status != "completed") || mission.CreatedAt.IsZero() || mission.UpdatedAt.IsZero() {
+	if !proof.ValidID(mission.ID) || strings.TrimSpace(mission.Agent) == "" || strings.TrimSpace(mission.Objective) == "" || (mission.Status != "active" && mission.Status != "completed") || mission.CreatedAt.IsZero() || mission.UpdatedAt.IsZero() {
 		return preparedMissionImport{}, fmt.Errorf("%w: invalid mission manifest", ErrInvalidMissionImport)
 	}
 	if mission.Metadata == nil {
@@ -108,7 +108,7 @@ func prepareMissionImport(bundle continuity.Bundle) (preparedMissionImport, erro
 	}
 	seenCheckpoints := make(map[string]struct{}, len(bundle.Checkpoints))
 	for _, checkpoint := range bundle.Checkpoints {
-		if strings.TrimSpace(checkpoint.ID) == "" || checkpoint.Timestamp.IsZero() || !validMode(checkpoint.Source.Mode) || strings.TrimSpace(checkpoint.Source.Adapter) == "" {
+		if !proof.ValidID(checkpoint.ID) || checkpoint.Timestamp.IsZero() || !validMode(checkpoint.Source.Mode) || strings.TrimSpace(checkpoint.Source.Adapter) == "" {
 			return preparedMissionImport{}, fmt.Errorf("%w: invalid checkpoint %q", ErrInvalidMissionImport, checkpoint.ID)
 		}
 		if _, exists := seenCheckpoints[checkpoint.ID]; exists {
@@ -121,7 +121,7 @@ func prepareMissionImport(bundle continuity.Bundle) (preparedMissionImport, erro
 	order := make([]string, 0, len(bundle.RunProofs))
 	for _, runProof := range bundle.RunProofs {
 		run := runProof.Run
-		if strings.TrimSpace(run.ID) == "" || strings.TrimSpace(run.Agent) == "" || run.StartedAt.IsZero() || !validImportedRunStatus(run.Status) {
+		if !proof.ValidID(run.ID) || strings.TrimSpace(run.Agent) == "" || run.StartedAt.IsZero() || !validImportedRunStatus(run.Status) {
 			return preparedMissionImport{}, fmt.Errorf("%w: invalid run manifest for %q", ErrInvalidMissionImport, run.ID)
 		}
 		if run.Metadata == nil {
@@ -132,7 +132,7 @@ func prepareMissionImport(bundle continuity.Bundle) (preparedMissionImport, erro
 			return preparedMissionImport{}, fmt.Errorf("%w: invalid run metadata for %q: %v", ErrInvalidMissionImport, run.ID, err)
 		}
 		for _, event := range runProof.Events {
-			if event.SchemaVersion != "1" || strings.TrimSpace(event.ID) == "" || event.Timestamp.IsZero() || !validMode(event.Source.Mode) || strings.TrimSpace(event.Source.Adapter) == "" {
+			if event.SchemaVersion != "1" || !proof.ValidID(event.ID) || event.Timestamp.IsZero() || !validMode(event.Source.Mode) || strings.TrimSpace(event.Source.Adapter) == "" {
 				return preparedMissionImport{}, fmt.Errorf("%w: invalid event %q", ErrInvalidMissionImport, event.ID)
 			}
 		}

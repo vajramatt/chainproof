@@ -76,10 +76,7 @@ func TestWebExplorerIncludesMissionContinuityWorkspace(t *testing.T) {
 	}
 	defer db.Close()
 	app := New(db, "127.0.0.1:0", NewStatus("test"))
-	request := httptest.NewRequest(http.MethodGet, "http://localhost/", nil)
-	response := httptest.NewRecorder()
-	app.http.Handler.ServeHTTP(response, request)
-	body := response.Body.String()
+	body := explorerSource(t, app)
 	for _, text := range []string{`data-view="missions"`, `id="missionList"`, `id="missionDetail"`, "Commitment state is reported", "Recovery required", "data-recovery-run"} {
 		if !strings.Contains(body, text) {
 			t.Fatalf("mission workspace is missing %q", text)
@@ -506,5 +503,57 @@ func TestServerAcceptsLocalJSONWrites(t *testing.T) {
 	app.http.Handler.ServeHTTP(response, request)
 	if response.Code != http.StatusCreated {
 		t.Fatalf("local artifact PUT rejected: %d %s", response.Code, response.Body.String())
+	}
+}
+
+func explorerSource(t *testing.T, app *Server) string {
+	t.Helper()
+	var source strings.Builder
+	for _, path := range []string{"/", "/app.js"} {
+		request := httptest.NewRequest(http.MethodGet, "http://localhost"+path, nil)
+		response := httptest.NewRecorder()
+		app.http.Handler.ServeHTTP(response, request)
+		if response.Code != http.StatusOK {
+			t.Fatalf("GET %s status %d", path, response.Code)
+		}
+		source.WriteString(response.Body.String())
+	}
+	return source.String()
+}
+
+func TestWebExplorerForbidsInlineScriptAndEscapesIdentifiers(t *testing.T) {
+	db, err := store.Open(filepath.Join(t.TempDir(), "test.db"))
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer db.Close()
+	app := New(db, "127.0.0.1:0", NewStatus("test"))
+	request := httptest.NewRequest(http.MethodGet, "http://localhost/", nil)
+	response := httptest.NewRecorder()
+	app.http.Handler.ServeHTTP(response, request)
+	policy := response.Header().Get("Content-Security-Policy")
+	if !strings.Contains(policy, "script-src 'self'") || strings.Contains(policy, "script-src 'unsafe-inline'") || strings.Contains(policy, "'unsafe-eval'") {
+		t.Fatalf("script policy allows inline script: %q", policy)
+	}
+	page := response.Body.String()
+	if strings.Contains(page, "<script>") || !strings.Contains(page, `<script src="/app.js"></script>`) {
+		t.Fatal("explorer page still contains inline script")
+	}
+	request = httptest.NewRequest(http.MethodGet, "http://localhost/app.js", nil)
+	response = httptest.NewRecorder()
+	app.http.Handler.ServeHTTP(response, request)
+	if media := response.Header().Get("Content-Type"); !strings.HasPrefix(media, "text/javascript") {
+		t.Fatalf("app.js media type %q", media)
+	}
+	script := response.Body.String()
+	for _, raw := range []string{`data-id="'+r.run_id`, `data-event="'+h.event_id`, `'/api/events/'+id`} {
+		if strings.Contains(script, raw) {
+			t.Fatalf("explorer interpolates %q without escaping", raw)
+		}
+	}
+	for _, escaped := range []string{`data-id="'+esc(r.run_id)+'"`, `data-event="'+esc(h.event_id)+'"`, `'"':'&quot;'`, `"'":'&#39;'`} {
+		if !strings.Contains(script, escaped) {
+			t.Fatalf("explorer is missing escaping %q", escaped)
+		}
 	}
 }

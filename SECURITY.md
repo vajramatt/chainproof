@@ -62,6 +62,11 @@ fetch-metadata checks plus mandatory browser preflight for `PUT`. Read-only
 endpoints are not origin-checked; browsers cannot read their responses across
 origins because no CORS headers are emitted.
 
+Embedded explorer is served with `script-src 'self'`: its script ships as
+`/app.js`, inline script is refused, and every ledger-supplied value is
+HTML-escaped before rendering. Client-supplied event IDs and imported mission,
+run, checkpoint, and event IDs must match `[A-Za-z0-9._:-]{1,128}`.
+
 Do not expose API through port forwarding, container publishing, reverse
 proxy, tunnel, or public ingress. Adding HTTPS alone does not supply required
 authorization or change local trust model. Remote and multi-host operation need

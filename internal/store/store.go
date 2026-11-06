@@ -284,6 +284,8 @@ func (s *Store) appendOnce(ctx context.Context, runID string, input proof.EventI
 	}
 	if input.ID == "" {
 		input.ID = uuid.NewString()
+	} else if !proof.ValidID(input.ID) {
+		return proof.Event{}, fmt.Errorf("invalid event_id %q: must match [A-Za-z0-9._:-]{1,%d}", input.ID, proof.MaxIDLength)
 	}
 	now := time.Now().UTC()
 	if input.Timestamp != nil {
