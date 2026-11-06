@@ -50,6 +50,18 @@ addresses and defaults to `127.0.0.1:7331`; non-loopback binding is rejected
 before socket opens. Requests with non-local Host headers are also rejected as
 defense in depth.
 
+Loopback binding does not stop a web page in a local browser from sending
+requests to `127.0.0.1`. State-changing API requests (anything other than `GET`,
+`HEAD`, or `OPTIONS`) are rejected when `Sec-Fetch-Site` is present and not
+`same-origin` or `none`, or when `Origin` is present and is not a loopback HTTP
+origin on the server's port. `POST` bodies must declare `Content-Type:
+application/json`, which a cross-origin "simple" browser request cannot send
+without a CORS preflight; the server emits no CORS headers, so preflights fail.
+Artifact `PUT` carries the artifact media type and relies on the same Origin and
+fetch-metadata checks plus mandatory browser preflight for `PUT`. Read-only
+endpoints are not origin-checked; browsers cannot read their responses across
+origins because no CORS headers are emitted.
+
 Do not expose API through port forwarding, container publishing, reverse
 proxy, tunnel, or public ingress. Adding HTTPS alone does not supply required
 authorization or change local trust model. Remote and multi-host operation need

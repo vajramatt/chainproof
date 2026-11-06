@@ -2,6 +2,8 @@ package server
 
 import (
 	"context"
+	"crypto/sha256"
+	"encoding/hex"
 	"encoding/json"
 	"net/http"
 	"net/http/httptest"
@@ -173,6 +175,7 @@ func TestMissionAPIStartsAndResumesDurableContext(t *testing.T) {
 	app := New(db, "127.0.0.1:0", NewStatus("test"))
 
 	request := httptest.NewRequest(http.MethodPost, "http://localhost/api/missions", strings.NewReader(`{"agent":"builder","objective":"Ship continuity"}`))
+	request.Header.Set("Content-Type", "application/json")
 	response := httptest.NewRecorder()
 	app.http.Handler.ServeHTTP(response, request)
 	if response.Code != http.StatusCreated {
@@ -185,6 +188,7 @@ func TestMissionAPIStartsAndResumesDurableContext(t *testing.T) {
 
 	checkpointBody := `{"run_id":"` + run.ID + `","summary":"Storage works","next_actions":["add CLI"]}`
 	request = httptest.NewRequest(http.MethodPost, "http://localhost/api/missions/"+mission.ID+"/checkpoints", strings.NewReader(checkpointBody))
+	request.Header.Set("Content-Type", "application/json")
 	response = httptest.NewRecorder()
 	app.http.Handler.ServeHTTP(response, request)
 	if response.Code != http.StatusCreated {
@@ -260,6 +264,7 @@ func TestMissionRecoveryAPIInspectsAndReconcilesTails(t *testing.T) {
 	}
 
 	request = httptest.NewRequest(http.MethodPost, "http://localhost/api/missions/"+mission.ID+"/recovery/"+run.ID+"/accept", strings.NewReader(`{"reason":"reviewed","summary":"Recovered safely"}`))
+	request.Header.Set("Content-Type", "application/json")
 	response = httptest.NewRecorder()
 	app.http.Handler.ServeHTTP(response, request)
 	if response.Code != http.StatusCreated {
@@ -276,6 +281,7 @@ func TestMissionRecoveryAPIInspectsAndReconcilesTails(t *testing.T) {
 	rejectedRun, _ := db.Start(ctx, "builder", "codex", "gpt-test", map[string]any{"mission_id": mission.ID})
 	db.Append(ctx, rejectedRun.ID, proof.EventInput{Kind: "tool.result", Source: proof.Source{Adapter: "test", Mode: "imported"}})
 	request = httptest.NewRequest(http.MethodPost, "http://localhost/api/missions/"+mission.ID+"/recovery/"+rejectedRun.ID+"/reject", strings.NewReader(`{"reason":"untrusted"}`))
+	request.Header.Set("Content-Type", "application/json")
 	response = httptest.NewRecorder()
 	app.http.Handler.ServeHTTP(response, request)
 	if response.Code != http.StatusCreated {
@@ -323,6 +329,7 @@ func TestMissionAcquireAPIClaimsAvailableWorkWithContext(t *testing.T) {
 	mission, _ := db.StartMission(context.Background(), continuity.MissionInput{Agent: "builder", Objective: "Acquire through API"})
 	app := New(db, "127.0.0.1:0", NewStatus("test"))
 	request := httptest.NewRequest(http.MethodPost, "http://localhost/api/missions/acquire", strings.NewReader(`{"holder":"worker-a","ttl_seconds":600,"max_evidence":8}`))
+	request.Header.Set("Content-Type", "application/json")
 	response := httptest.NewRecorder()
 	app.http.Handler.ServeHTTP(response, request)
 	if response.Code != http.StatusCreated {
@@ -336,6 +343,7 @@ func TestMissionAcquireAPIClaimsAvailableWorkWithContext(t *testing.T) {
 		t.Fatalf("unexpected acquisition: %+v", acquired)
 	}
 	request = httptest.NewRequest(http.MethodPost, "http://localhost/api/missions/acquire", strings.NewReader(`{"holder":"worker-b"}`))
+	request.Header.Set("Content-Type", "application/json")
 	response = httptest.NewRecorder()
 	app.http.Handler.ServeHTTP(response, request)
 	if response.Code != http.StatusBadRequest || !strings.Contains(response.Body.String(), "no available mission") {
@@ -352,6 +360,7 @@ func TestRunAPIBindsToMissionAndInheritsAgent(t *testing.T) {
 	mission, _ := db.StartMission(context.Background(), continuity.MissionInput{Agent: "durable-agent", Objective: "Run through API"})
 	app := New(db, "127.0.0.1:0", NewStatus("test"))
 	request := httptest.NewRequest(http.MethodPost, "http://localhost/api/runs", strings.NewReader(`{"mission_id":"`+mission.ID+`","harness":"custom"}`))
+	request.Header.Set("Content-Type", "application/json")
 	response := httptest.NewRecorder()
 	app.http.Handler.ServeHTTP(response, request)
 	if response.Code != http.StatusCreated {
@@ -375,6 +384,7 @@ func TestMissionLeaseAPIExposesAtomicHandoff(t *testing.T) {
 	mission, _ := db.StartMission(context.Background(), continuity.MissionInput{Agent: "builder", Objective: "Coordinate API workers"})
 	app := New(db, "127.0.0.1:0", NewStatus("test"))
 	request := httptest.NewRequest(http.MethodPost, "http://localhost/api/missions/"+mission.ID+"/lease/claim", strings.NewReader(`{"holder":"worker-a","ttl_seconds":600}`))
+	request.Header.Set("Content-Type", "application/json")
 	response := httptest.NewRecorder()
 	app.http.Handler.ServeHTTP(response, request)
 	if response.Code != http.StatusCreated {
@@ -385,6 +395,7 @@ func TestMissionLeaseAPIExposesAtomicHandoff(t *testing.T) {
 		t.Fatal(err)
 	}
 	request = httptest.NewRequest(http.MethodPost, "http://localhost/api/missions/"+mission.ID+"/lease/handoff", strings.NewReader(`{"lease_id":"`+first.LeaseID+`","holder":"worker-b","ttl_seconds":1200}`))
+	request.Header.Set("Content-Type", "application/json")
 	response = httptest.NewRecorder()
 	app.http.Handler.ServeHTTP(response, request)
 	if response.Code != http.StatusCreated {
@@ -412,5 +423,88 @@ func TestMissionLeaseAPIExposesAtomicHandoff(t *testing.T) {
 func TestMissionLeaseAPIRejectsOverflowingTTL(t *testing.T) {
 	if _, err := (leaseRequest{TTLSeconds: int64(1<<63 - 1)}).ttl(); err == nil {
 		t.Fatal("overflowing ttl_seconds was accepted")
+	}
+}
+
+func TestServerRejectsCrossSiteWrites(t *testing.T) {
+	db, err := store.Open(filepath.Join(t.TempDir(), "test.db"))
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer db.Close()
+	app := New(db, "127.0.0.1:0", NewStatus("test"))
+	body := `{"agent":"attacker","objective":"Injected work"}`
+	cases := []struct {
+		name    string
+		headers map[string]string
+		status  int
+	}{
+		{"no-cors text/plain", map[string]string{"Content-Type": "text/plain;charset=UTF-8", "Origin": "https://attacker.example", "Sec-Fetch-Site": "cross-site"}, http.StatusForbidden},
+		{"same-site other port", map[string]string{"Content-Type": "application/json", "Sec-Fetch-Site": "same-site"}, http.StatusForbidden},
+		{"foreign origin", map[string]string{"Content-Type": "application/json", "Origin": "https://attacker.example"}, http.StatusForbidden},
+		{"loopback origin other port", map[string]string{"Content-Type": "application/json", "Origin": "http://127.0.0.1:8080"}, http.StatusForbidden},
+		{"opaque origin", map[string]string{"Content-Type": "application/json", "Origin": "null"}, http.StatusForbidden},
+		{"form post", map[string]string{"Content-Type": "application/x-www-form-urlencoded"}, http.StatusUnsupportedMediaType},
+		{"text/plain without browser headers", map[string]string{"Content-Type": "text/plain"}, http.StatusUnsupportedMediaType},
+		{"missing content type", map[string]string{}, http.StatusUnsupportedMediaType},
+	}
+	for _, tc := range cases {
+		request := httptest.NewRequest(http.MethodPost, "http://127.0.0.1:7331/api/missions", strings.NewReader(body))
+		for key, value := range tc.headers {
+			request.Header.Set(key, value)
+		}
+		response := httptest.NewRecorder()
+		app.http.Handler.ServeHTTP(response, request)
+		if response.Code != tc.status {
+			t.Errorf("%s: expected %d, got %d: %s", tc.name, tc.status, response.Code, response.Body.String())
+		}
+	}
+	missions, err := db.Missions(context.Background(), "", 10)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if len(missions) != 0 {
+		t.Fatalf("rejected requests created missions: %+v", missions)
+	}
+
+	sum := sha256.Sum256([]byte("x"))
+	request := httptest.NewRequest(http.MethodPut, "http://127.0.0.1:7331/api/artifacts/"+hex.EncodeToString(sum[:]), strings.NewReader("x"))
+	request.Header.Set("Origin", "https://attacker.example")
+	response := httptest.NewRecorder()
+	app.http.Handler.ServeHTTP(response, request)
+	if response.Code != http.StatusForbidden {
+		t.Fatalf("cross-origin artifact PUT: expected 403, got %d", response.Code)
+	}
+}
+
+func TestServerAcceptsLocalJSONWrites(t *testing.T) {
+	db, err := store.Open(filepath.Join(t.TempDir(), "test.db"))
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer db.Close()
+	app := New(db, "127.0.0.1:0", NewStatus("test"))
+	for _, headers := range []map[string]string{
+		{"Content-Type": "application/json"},
+		{"Content-Type": "application/json; charset=utf-8", "Origin": "http://127.0.0.1:7331", "Sec-Fetch-Site": "same-origin"},
+		{"Content-Type": "Application/JSON", "Origin": "http://localhost:7331", "Sec-Fetch-Site": "none"},
+	} {
+		request := httptest.NewRequest(http.MethodPost, "http://127.0.0.1:7331/api/missions", strings.NewReader(`{"agent":"builder","objective":"Local work"}`))
+		for key, value := range headers {
+			request.Header.Set(key, value)
+		}
+		response := httptest.NewRecorder()
+		app.http.Handler.ServeHTTP(response, request)
+		if response.Code != http.StatusCreated {
+			t.Fatalf("local write %v rejected: %d %s", headers, response.Code, response.Body.String())
+		}
+	}
+	sum := sha256.Sum256([]byte("# notes"))
+	request := httptest.NewRequest(http.MethodPut, "http://127.0.0.1:7331/api/artifacts/"+hex.EncodeToString(sum[:]), strings.NewReader("# notes"))
+	request.Header.Set("Content-Type", "text/markdown")
+	response := httptest.NewRecorder()
+	app.http.Handler.ServeHTTP(response, request)
+	if response.Code != http.StatusCreated {
+		t.Fatalf("local artifact PUT rejected: %d %s", response.Code, response.Body.String())
 	}
 }

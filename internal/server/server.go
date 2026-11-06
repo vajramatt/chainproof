@@ -7,8 +7,10 @@ import (
 	"errors"
 	"fmt"
 	"io"
+	"mime"
 	"net"
 	"net/http"
+	"net/url"
 	"strconv"
 	"strings"
 	"time"
@@ -58,7 +60,7 @@ func New(db *store.Store, address string, status *Status) *Server {
 	mux.HandleFunc("PUT /api/artifacts/{hash}", s.putArtifact)
 	mux.HandleFunc("GET /api/artifacts/{hash}", s.getArtifact)
 	mux.HandleFunc("GET /", web)
-	s.http = &http.Server{Addr: address, Handler: localhostOnly(cors(mux))}
+	s.http = &http.Server{Addr: address, Handler: localhostOnly(sameOriginWrites(cors(mux)))}
 	return s
 }
 
@@ -427,6 +429,72 @@ func localhostOnly(next http.Handler) http.Handler {
 		}
 		next.ServeHTTP(w, r)
 	})
+}
+
+// sameOriginWrites blocks browser cross-site request forgery against the
+// unauthenticated loopback API. Host checks stop DNS rebinding but not a page on
+// another origin that sends a "simple" no-cors POST to 127.0.0.1. State-changing
+// requests therefore must not come from another browser site, must not carry a
+// foreign Origin, and (except artifact PUT, which browsers always preflight)
+// must declare application/json, which no cross-origin simple request can do.
+func sameOriginWrites(next http.Handler) http.Handler {
+	return http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		switch r.Method {
+		case http.MethodGet, http.MethodHead, http.MethodOptions:
+			next.ServeHTTP(w, r)
+			return
+		}
+		if site := r.Header.Get("Sec-Fetch-Site"); site != "" && site != "same-origin" && site != "none" {
+			rejectRequest(w, http.StatusForbidden, "cross-site request rejected")
+			return
+		}
+		if origin := r.Header.Get("Origin"); origin != "" && !sameLocalOrigin(origin, r.Host) {
+			rejectRequest(w, http.StatusForbidden, "cross-origin request rejected")
+			return
+		}
+		if r.Method != http.MethodPut {
+			media, _, err := mime.ParseMediaType(r.Header.Get("Content-Type"))
+			if err != nil || media != "application/json" {
+				rejectRequest(w, http.StatusUnsupportedMediaType, "Content-Type must be application/json")
+				return
+			}
+		}
+		next.ServeHTTP(w, r)
+	})
+}
+
+// sameLocalOrigin reports whether an Origin header names a loopback HTTP origin
+// on the same port as the request Host.
+func sameLocalOrigin(origin, requestHost string) bool {
+	parsed, err := url.Parse(origin)
+	if err != nil || parsed.Scheme != "http" || parsed.Host == "" || parsed.Path != "" || parsed.User != nil {
+		return false
+	}
+	if !isLoopbackHost(parsed.Hostname()) {
+		return false
+	}
+	return portOrDefault(parsed.Port()) == portOrDefault(hostPort(requestHost))
+}
+
+func hostPort(host string) string {
+	if _, port, err := net.SplitHostPort(host); err == nil {
+		return port
+	}
+	return ""
+}
+
+func portOrDefault(port string) string {
+	if port == "" {
+		return "80"
+	}
+	return port
+}
+
+func rejectRequest(w http.ResponseWriter, status int, message string) {
+	w.Header().Set("Content-Type", "application/json")
+	w.Header().Set("X-Content-Type-Options", "nosniff")
+	w.WriteHeader(status)
+	json.NewEncoder(w).Encode(map[string]any{"error": map[string]string{"message": message}})
 }
 
 // ValidateListenAddress rejects any address outside ChainProof's local-only

@@ -73,6 +73,12 @@ Start `chainproof serve`, create a run with `POST /api/runs`, then append events
 to `POST /api/runs/{id}/events`. This works from Claude Code hooks, Codex hooks,
 Kimi, Qwen, local model runners, and custom programs.
 
+Every `POST` must send `Content-Type: application/json`; other media types are
+rejected with `415`. Artifact uploads (`PUT /api/artifacts/{sha256}`) send the
+artifact media type instead. State-changing requests carrying a non-loopback or
+different-port `Origin`, or a `Sec-Fetch-Site` other than `same-origin` or
+`none`, are rejected with `403` so web pages cannot write to the local ledger.
+
 ## Pull
 
 Normalize a harness history to one `EventInput` JSON object per line, then run:
