@@ -8,6 +8,7 @@ import (
 	"path/filepath"
 	"strings"
 	"time"
+	"unicode/utf8"
 
 	tea "github.com/charmbracelet/bubbletea"
 	"github.com/charmbracelet/lipgloss"
@@ -376,7 +377,7 @@ func (m model) View() string {
 		if m.searching {
 			cursor = "▌"
 		}
-		search = "  / " + m.query + cursor
+		search = "  / " + safeText(m.query) + cursor
 	}
 	active, agents := 0, map[string]bool{}
 	for _, run := range m.runs {
@@ -501,7 +502,7 @@ func (m model) detailView(t theme, w, h int) string {
 		return pane(t, w, h, []string{"  No provenance runs yet.", "", "  Codex discovery is automatic."})
 	}
 	r := m.runs[m.selected]
-	valid := lipgloss.NewStyle().Foreground(t.Danger).Render("✗ INVALID " + m.verify.Reason)
+	valid := lipgloss.NewStyle().Foreground(t.Danger).Render("✗ INVALID " + safeText(m.verify.Reason))
 	if m.verify.Valid {
 		valid = lipgloss.NewStyle().Foreground(t.Success).Render("✓ CHAIN VERIFIED")
 	}
@@ -549,7 +550,7 @@ func (m model) detailView(t theme, w, h int) string {
 	if len(m.events) > 1 {
 		duration = m.events[len(m.events)-1].Timestamp.Sub(m.events[0].Timestamp).Round(time.Second).String()
 	}
-	identity := "  " + chip(" "+strings.ToUpper(r.Status)+" ", t.BG, statusColor(t, r.Status)) + "  " + lipgloss.NewStyle().Bold(true).Foreground(t.Text).Render(r.Agent) + lipgloss.NewStyle().Foreground(t.Muted).Render("  "+r.Harness+" / "+r.Model+"  ·  run "+shortID(r.ID))
+	identity := "  " + chip(" "+strings.ToUpper(safeText(r.Status))+" ", t.BG, statusColor(t, r.Status)) + "  " + lipgloss.NewStyle().Bold(true).Foreground(t.Text).Render(safeText(r.Agent)) + lipgloss.NewStyle().Foreground(t.Muted).Render("  "+safeText(r.Harness)+" / "+safeText(r.Model)+"  ·  run "+shortID(r.ID))
 	metrics := fmt.Sprintf("  %d EVENTS   %d TOOLS   %d CHANGES   %d FAILURES   %d POLICY   %d IN / %d OUT   %s", len(m.events), toolCount, changes, failures, policySignals, humanCount, outputCount, duration)
 	lines := []string{
 		lipgloss.NewStyle().Bold(true).Foreground(t.Primary).Render("  // LIVE PROVENANCE"),
@@ -632,10 +633,10 @@ func statusColor(t theme, status string) lipgloss.Color {
 }
 func eventColumns(w int, seq, clock, source, kind, tool, detail string) string {
 	if w < 88 {
-		return fmt.Sprintf("  %-4s %-9s %-18s %s", seq, source, trim(kind, 18), trim(firstNonempty(detail, tool), max(8, w-38)))
+		return fmt.Sprintf("  %-4s %-9s %-18s %s", seq, safeText(source), trim(kind, 18), trim(firstNonempty(detail, tool), max(8, w-38)))
 	}
 	detailW := max(12, w-73)
-	return fmt.Sprintf("  %-4s  %-8s  %-9s  %-18s  %-18s  %s", seq, clock, source, trim(kind, 18), trim(tool, 18), trim(detail, detailW))
+	return fmt.Sprintf("  %-4s  %-8s  %-9s  %-18s  %-18s  %s", seq, clock, safeText(source), trim(kind, 18), trim(tool, 18), trim(detail, detailW))
 }
 func eventEvidence(event proof.Event) (tool, status, detail string) {
 	payload, _ := event.Payload.(map[string]any)
@@ -699,8 +700,8 @@ func eventColor(t theme, kind string) lipgloss.Color {
 }
 func inspectEvent(t theme, w, h int, event proof.Event, offset int) string {
 	lines := []string{
-		chip(" EVENT ", t.BG, t.Secondary) + " " + lipgloss.NewStyle().Bold(true).Foreground(t.Text).Render(event.Kind),
-		lipgloss.NewStyle().Foreground(t.Muted).Render(fmt.Sprintf("  #%04d · %s · %s", event.Sequence, strings.ToUpper(event.Source.Mode), event.Timestamp.Format("15:04:05"))),
+		chip(" EVENT ", t.BG, t.Secondary) + " " + lipgloss.NewStyle().Bold(true).Foreground(t.Text).Render(safeText(event.Kind)),
+		lipgloss.NewStyle().Foreground(t.Muted).Render(fmt.Sprintf("  #%04d · %s · %s", event.Sequence, strings.ToUpper(safeText(event.Source.Mode)), event.Timestamp.Format("15:04:05"))),
 		"",
 		lipgloss.NewStyle().Foreground(t.Primary).Render("  ACTOR") + "  " + trim(event.Actor.Name+" · "+event.Actor.Harness+" · "+event.Actor.Model, w-11),
 		lipgloss.NewStyle().Foreground(t.Primary).Render("  SOURCE") + " " + trim(event.Source.Adapter+" · "+event.Source.NativeEventID, w-12),
@@ -742,14 +743,41 @@ func backgroundANSI(color lipgloss.Color) string {
 	}
 	return fmt.Sprintf("\x1b[48;2;%d;%d;%dm", red, green, blue)
 }
+
+// trim sanitizes s for terminal output and truncates it to n bytes on a rune
+// boundary. Every externally supplied string must pass through trim or
+// safeText before rendering.
 func trim(s string, n int) string {
 	if n <= 0 {
 		return ""
 	}
+	s = safeText(s)
 	if len(s) <= n {
 		return s
 	}
-	return s[:max(0, n-1)] + "…"
+	cut := max(0, n-1)
+	for cut > 0 && !utf8.RuneStart(s[cut]) {
+		cut--
+	}
+	return s[:cut] + "…"
+}
+
+// safeText removes C0 controls, DEL, and C1 controls (U+0080–U+009F) so
+// agent-supplied text cannot emit terminal escape sequences, and replaces
+// invalid UTF-8 with U+FFFD.
+func safeText(s string) string {
+	if !strings.ContainsFunc(s, func(r rune) bool { return r < 0x20 || (r >= 0x7f && r <= 0x9f) || r == utf8.RuneError }) {
+		return s
+	}
+	var out strings.Builder
+	out.Grow(len(s))
+	for _, r := range s {
+		if r < 0x20 || (r >= 0x7f && r <= 0x9f) {
+			continue
+		}
+		out.WriteRune(r)
+	}
+	return out.String()
 }
 
 func shortID(id string) string {

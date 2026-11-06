@@ -98,3 +98,37 @@ func TestOperationalEvidenceFilters(t *testing.T) {
 		}
 	}
 }
+
+func TestAgentSuppliedTextCannotEmitTerminalControls(t *testing.T) {
+	hostile := "evil\x1b]52;c;cGF5bG9hZA==\x07\x1b[2J\u009b31m\u0085\x7f\r\nname"
+	if got := safeText(hostile); strings.ContainsFunc(got, func(r rune) bool { return r < 0x20 || (r >= 0x7f && r <= 0x9f) }) {
+		t.Fatalf("control characters survived: %q", got)
+	}
+	if got := trim("ab\x1bcd", 8); got != "abcd" {
+		t.Fatalf("control not stripped before truncation: %q", got)
+	}
+	if got := trim("aaaéé", 5); got != "aaa…" {
+		t.Fatalf("trim split a rune: %q", got)
+	}
+	m := model{
+		runs:     []proof.Run{{ID: "11111111-1111-1111-1111-111111111111", Agent: hostile, Harness: hostile, Model: hostile, Status: "completed\x1b[31m", ChainHead: proof.GenesisHash}},
+		events:   []proof.Event{{ID: "event", Sequence: 0, Timestamp: time.Now(), Kind: "tool.result" + hostile, Actor: proof.Actor{Name: hostile, Harness: hostile, Model: hostile}, Source: proof.Source{Mode: "imported" + hostile, Adapter: hostile, NativeEventID: hostile}, Payload: map[string]any{"command": hostile, "tool": hostile, "status": hostile}}},
+		verify:   proof.Verification{Valid: false, Reason: hostile},
+		width:    140,
+		height:   40,
+		query:    hostile,
+		notice:   hostile,
+		inspect:  true,
+		selected: 0,
+	}
+	for name, view := range map[string]string{
+		"main":    m.detailView(themes[0], 100, 30) + m.runsView(themes[0], 38, 30),
+		"inspect": inspectEvent(themes[0], 100, 40, m.events[0], 0),
+	} {
+		for _, forbidden := range []string{"\x1b]52", "\x1b[2J", "\u009b", "\u0085", "\x7f", "\x07", "\r"} {
+			if strings.Contains(view, forbidden) {
+				t.Fatalf("%s view rendered agent-supplied control %q", name, forbidden)
+			}
+		}
+	}
+}
