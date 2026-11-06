@@ -406,7 +406,9 @@ func (s *Server) getArtifact(w http.ResponseWriter, r *http.Request) {
 }
 func decode(r *http.Request, v any) error {
 	defer r.Body.Close()
-	return json.NewDecoder(io.LimitReader(r.Body, 4<<20)).Decode(v)
+	decoder := json.NewDecoder(io.LimitReader(r.Body, 4<<20))
+	decoder.UseNumber()
+	return decoder.Decode(v)
 }
 func respond(w http.ResponseWriter, v any, e error, status int) {
 	w.Header().Set("Content-Type", "application/json")

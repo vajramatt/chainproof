@@ -3,7 +3,6 @@ package store
 import (
 	"context"
 	"database/sql"
-	"encoding/json"
 	"errors"
 	"fmt"
 	"slices"
@@ -282,7 +281,7 @@ func latestCheckpointTx(ctx context.Context, tx *sql.Tx, missionID string) (cont
 		return continuity.Checkpoint{}, err
 	}
 	var checkpoint continuity.Checkpoint
-	if err := json.Unmarshal([]byte(raw), &checkpoint); err != nil {
+	if err := proof.DecodeJSON([]byte(raw), &checkpoint); err != nil {
 		return continuity.Checkpoint{}, err
 	}
 	checkpoint.CheckpointHash = hash
@@ -382,7 +381,7 @@ func recoveryBoundaryTx(ctx context.Context, tx *sql.Tx, missionID, runID string
 		return 0, "", err
 	}
 	var anchored continuity.Checkpoint
-	if err = json.Unmarshal([]byte(raw), &anchored); err != nil {
+	if err = proof.DecodeJSON([]byte(raw), &anchored); err != nil {
 		return 0, "", err
 	}
 	return anchored.Run.EntryCount, anchored.Run.ChainHead, nil
@@ -401,7 +400,7 @@ func verifyMissionContinuityTx(ctx context.Context, tx *sql.Tx, mission continui
 			return err
 		}
 		var checkpoint continuity.Checkpoint
-		if err = json.Unmarshal([]byte(raw), &checkpoint); err != nil {
+		if err = proof.DecodeJSON([]byte(raw), &checkpoint); err != nil {
 			rows.Close()
 			return err
 		}
@@ -444,7 +443,7 @@ func runBundleTx(ctx context.Context, tx *sql.Tx, anchor continuity.RunAnchor) (
 			return proof.Bundle{}, err
 		}
 		var event proof.Event
-		if err = json.Unmarshal([]byte(raw), &event); err != nil {
+		if err = proof.DecodeJSON([]byte(raw), &event); err != nil {
 			rows.Close()
 			return proof.Bundle{}, err
 		}
@@ -476,7 +475,7 @@ func (s *Store) Checkpoints(ctx context.Context, missionID string) ([]continuity
 			return nil, err
 		}
 		var checkpoint continuity.Checkpoint
-		if err = json.Unmarshal([]byte(raw), &checkpoint); err != nil {
+		if err = proof.DecodeJSON([]byte(raw), &checkpoint); err != nil {
 			return nil, err
 		}
 		checkpoint.CheckpointHash = hash
@@ -734,7 +733,7 @@ func (s *Store) runBundleAt(ctx context.Context, anchor continuity.RunAnchor) (p
 			return proof.Bundle{}, err
 		}
 		var event proof.Event
-		if err = json.Unmarshal([]byte(raw), &event); err != nil {
+		if err = proof.DecodeJSON([]byte(raw), &event); err != nil {
 			return proof.Bundle{}, err
 		}
 		event.EventHash = hash
@@ -757,7 +756,7 @@ func scanMission(row scanner) (continuity.Mission, error) {
 	}
 	mission.CreatedAt, _ = time.Parse(time.RFC3339Nano, created)
 	mission.UpdatedAt, _ = time.Parse(time.RFC3339Nano, updated)
-	if err = json.Unmarshal([]byte(metadata), &mission.Metadata); err != nil {
+	if err = proof.DecodeJSON([]byte(metadata), &mission.Metadata); err != nil {
 		return mission, err
 	}
 	return mission, nil

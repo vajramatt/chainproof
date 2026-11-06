@@ -5,7 +5,6 @@ import (
 	"crypto/sha256"
 	"database/sql"
 	"encoding/hex"
-	"encoding/json"
 	"errors"
 	"fmt"
 	"net/url"
@@ -429,7 +428,7 @@ func (s *Store) Events(ctx context.Context, id string) ([]proof.Event, error) {
 			return nil, e
 		}
 		var event proof.Event
-		if e = json.Unmarshal([]byte(raw), &event); e != nil {
+		if e = proof.DecodeJSON([]byte(raw), &event); e != nil {
 			return nil, e
 		}
 		event.EventHash = hash
@@ -445,7 +444,7 @@ func (s *Store) Event(ctx context.Context, id string) (proof.Event, error) {
 		return proof.Event{}, err
 	}
 	var event proof.Event
-	if err = json.Unmarshal([]byte(raw), &event); err != nil {
+	if err = proof.DecodeJSON([]byte(raw), &event); err != nil {
 		return proof.Event{}, err
 	}
 	event.EventHash = hash
@@ -582,6 +581,6 @@ func scanRun(row scanner) (proof.Run, error) {
 		t, _ := time.Parse(time.RFC3339Nano, completed.String)
 		r.CompletedAt = &t
 	}
-	json.Unmarshal([]byte(metadata), &r.Metadata)
+	proof.DecodeJSON([]byte(metadata), &r.Metadata)
 	return r, nil
 }

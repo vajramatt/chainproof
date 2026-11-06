@@ -557,3 +557,47 @@ func TestWebExplorerForbidsInlineScriptAndEscapesIdentifiers(t *testing.T) {
 		}
 	}
 }
+
+func TestAppendPreservesLargeIntegersThroughExport(t *testing.T) {
+	db, err := store.Open(filepath.Join(t.TempDir(), "test.db"))
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer db.Close()
+	run, err := db.Start(context.Background(), "builder", "test", "", nil)
+	if err != nil {
+		t.Fatal(err)
+	}
+	app := New(db, "127.0.0.1:0", NewStatus("test"))
+	request := httptest.NewRequest(http.MethodPost, "http://localhost/api/runs/"+run.ID+"/events", strings.NewReader(`{"kind":"tool.result","payload":{"id":12345678901234567891,"ratio":0.25}}`))
+	request.Header.Set("Content-Type", "application/json")
+	response := httptest.NewRecorder()
+	app.http.Handler.ServeHTTP(response, request)
+	if response.Code != http.StatusCreated {
+		t.Fatalf("append status %d: %s", response.Code, response.Body.String())
+	}
+	if !strings.Contains(response.Body.String(), "12345678901234567891") {
+		t.Fatalf("append response rounded integer: %s", response.Body.String())
+	}
+	if verification := db.Verify(context.Background(), run.ID); !verification.Valid {
+		t.Fatalf("stored chain invalid: %+v", verification)
+	}
+	bundle, err := db.Bundle(context.Background(), run.ID)
+	if err != nil {
+		t.Fatal(err)
+	}
+	raw, err := json.MarshalIndent(bundle, "", "  ")
+	if err != nil {
+		t.Fatal(err)
+	}
+	if !strings.Contains(string(raw), "12345678901234567891") {
+		t.Fatalf("export rounded integer: %s", raw)
+	}
+	var decoded proof.Bundle
+	if err = proof.DecodeStrict(raw, &decoded); err != nil {
+		t.Fatal(err)
+	}
+	if verification := proof.VerifyBundle(decoded); !verification.Valid {
+		t.Fatalf("exported bundle invalid: %+v", verification)
+	}
+}

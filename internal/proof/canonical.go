@@ -7,6 +7,7 @@ import (
 	"encoding/json"
 	"fmt"
 	"sort"
+	"strings"
 )
 
 const GenesisHash = "0000000000000000000000000000000000000000000000000000000000000000"
@@ -34,12 +35,18 @@ func CanonicalJSON(value any) ([]byte, error) {
 
 func writeCanonical(out *bytes.Buffer, value any) error {
 	switch v := value.(type) {
-	case nil, bool, string, json.Number:
+	case nil, bool, string:
 		encoded, err := json.Marshal(v)
 		if err != nil {
 			return err
 		}
 		out.Write(encoded)
+	case json.Number:
+		encoded, err := canonicalNumber(v)
+		if err != nil {
+			return err
+		}
+		out.WriteString(encoded)
 	case []any:
 		out.WriteByte('[')
 		for i, item := range v {
@@ -74,6 +81,30 @@ func writeCanonical(out *bytes.Buffer, value any) error {
 		return fmt.Errorf("unsupported canonical JSON type %T", value)
 	}
 	return nil
+}
+
+// canonicalNumber emits integer literals exactly as written, so integers beyond
+// 2^53 are hashed without float64 rounding. Numbers with a fraction or exponent
+// use encoding/json's float64 form, which is byte-identical to how version 1
+// chains were hashed before json.Number decoding was introduced.
+func canonicalNumber(number json.Number) (string, error) {
+	text := number.String()
+	digits := strings.TrimPrefix(text, "-")
+	if digits != "" && strings.Trim(digits, "0123456789") == "" {
+		if !json.Valid([]byte(text)) {
+			return "", fmt.Errorf("invalid JSON number %q", text)
+		}
+		return text, nil
+	}
+	value, err := number.Float64()
+	if err != nil {
+		return "", fmt.Errorf("invalid JSON number %q: %w", text, err)
+	}
+	encoded, err := json.Marshal(value)
+	if err != nil {
+		return "", err
+	}
+	return string(encoded), nil
 }
 
 func Hash(value any) (string, error) {

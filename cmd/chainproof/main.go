@@ -196,7 +196,7 @@ func run(args []string) error {
 			return err
 		}
 		var bundle proof.Bundle
-		if err = json.Unmarshal(raw, &bundle); err != nil {
+		if err = proof.DecodeStrict(raw, &bundle); err != nil {
 			return err
 		}
 		verification := proof.VerifyBundle(bundle)
@@ -215,7 +215,7 @@ func run(args []string) error {
 			return err
 		}
 		var bundle continuity.Bundle
-		if err = json.Unmarshal(raw, &bundle); err != nil {
+		if err = proof.DecodeStrict(raw, &bundle); err != nil {
 			return err
 		}
 		verification := continuity.VerifyBundle(bundle)
@@ -401,7 +401,7 @@ func run(args []string) error {
 				return readErr
 			}
 			var bundle continuity.Bundle
-			if decodeErr := json.Unmarshal(raw, &bundle); decodeErr != nil {
+			if decodeErr := proof.DecodeStrict(raw, &bundle); decodeErr != nil {
 				return fmt.Errorf("%w: decode continuity bundle: %v", store.ErrInvalidMissionImport, decodeErr)
 			}
 			result, importErr := db.ImportMission(ctx, bundle)
@@ -606,7 +606,7 @@ func run(args []string) error {
 			b, _ := io.ReadAll(os.Stdin)
 			raw = string(b)
 		}
-		if e = json.Unmarshal([]byte(raw), &in); e != nil {
+		if e = proof.DecodeJSON([]byte(raw), &in); e != nil {
 			return e
 		}
 		v, e := db.Append(ctx, args[1], in)
@@ -618,7 +618,7 @@ func run(args []string) error {
 		scan := bufio.NewScanner(os.Stdin)
 		for scan.Scan() {
 			var in proof.EventInput
-			if e = json.Unmarshal(scan.Bytes(), &in); e != nil {
+			if e = proof.DecodeJSON(scan.Bytes(), &in); e != nil {
 				return e
 			}
 			if in.Source.Mode == "" {
@@ -737,7 +737,7 @@ func run(args []string) error {
 			body, _ := io.ReadAll(os.Stdin)
 			raw = string(body)
 		}
-		if e = json.Unmarshal([]byte(raw), &input); e != nil {
+		if e = proof.DecodeJSON([]byte(raw), &input); e != nil {
 			return e
 		}
 		profile, profileErr := ensureCurrentAgent(dbPath, "")
@@ -821,10 +821,10 @@ func run(args []string) error {
 			var recovery struct {
 				Reason string `json:"reason"`
 			}
-			if e = json.Unmarshal([]byte(raw), &input); e != nil {
+			if e = proof.DecodeJSON([]byte(raw), &input); e != nil {
 				return e
 			}
-			if e = json.Unmarshal([]byte(raw), &recovery); e != nil {
+			if e = proof.DecodeJSON([]byte(raw), &recovery); e != nil {
 				return e
 			}
 			checkpoint, checkpointErr := db.AcceptRecovery(ctx, missionID, runID, recovery.Reason, input)
@@ -839,7 +839,7 @@ func run(args []string) error {
 				var recovery struct {
 					Reason string `json:"reason"`
 				}
-				if e = json.Unmarshal([]byte(reason), &recovery); e != nil {
+				if e = proof.DecodeJSON([]byte(reason), &recovery); e != nil {
 					return e
 				}
 				reason = recovery.Reason
@@ -1577,7 +1577,7 @@ func pullFile(ctx context.Context, db *store.Store, runID, path, adapter string)
 		line, readErr := reader.ReadBytes('\n')
 		if len(strings.TrimSpace(string(line))) > 0 {
 			var in proof.EventInput
-			if err = json.Unmarshal(line, &in); err != nil {
+			if err = proof.DecodeJSON(line, &in); err != nil {
 				return fmt.Errorf("offset %d: %w", offset, err)
 			}
 			in.Source.Mode = "imported"

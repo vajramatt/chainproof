@@ -25,6 +25,27 @@ Objects are recursively sorted by Unicode code-point key order. Arrays retain
 their order. Undefined values are rejected. The canonical UTF-8 JSON bytes are
 hashed with SHA-256. The first event's `previous_hash` is 64 zeroes.
 
+Numbers: an integer literal (optional `-` followed by digits only) is emitted
+exactly as written, with no float conversion, so integers beyond 2^53 are
+hashed precisely. Any number with a fraction or exponent is emitted as the
+shortest decimal that round-trips the IEEE 754 binary64 value, using exponent
+form (`1e+21`, `1e-7`) at magnitudes of 1e21 and above or below 1e-6. This
+equals Go `encoding/json` float64 output, which every v1 chain already uses.
+
+## Bundle parsing
+
+A verifier MUST parse a proof bundle so that every reader sees the same
+document. It MUST reject a bundle that contains:
+
+- duplicate keys in any object, including payload, metadata, and extensions;
+- a key in a schema object (bundle, run, event, actor, source, checkpoint) that
+  is not a declared field name, including keys that differ only by case;
+- a number whose text differs from its canonical form above (`1.0`, `1E2`);
+- data after the top-level JSON value.
+
+It MUST keep numbers in free-form values exact rather than converting them to
+binary64 before hashing.
+
 ## Collection modes
 
 - `observed`: captured by a wrapper or direct observer as execution occurred.

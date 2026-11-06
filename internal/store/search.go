@@ -83,7 +83,7 @@ func (s *Store) rebuildMissingIndex(ctx context.Context) error {
 			return err
 		}
 		var event proof.Event
-		if err = json.Unmarshal([]byte(raw), &event); err != nil {
+		if err = proof.DecodeJSON([]byte(raw), &event); err != nil {
 			return err
 		}
 		all = append(all, pending{event: event, run: r})

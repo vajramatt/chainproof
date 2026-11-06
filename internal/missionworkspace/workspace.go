@@ -223,7 +223,7 @@ func verify(root string) (Manifest, continuity.Bundle, []store.MissionImportArti
 	}
 
 	var bundle continuity.Bundle
-	if err = json.Unmarshal(content["continuity.json"], &bundle); err != nil {
+	if err = proof.DecodeStrict(content["continuity.json"], &bundle); err != nil {
 		return Manifest{}, continuity.Bundle{}, nil, fmt.Errorf("decode continuity proof: %w", err)
 	}
 	if err = store.ValidateMissionImport(bundle); err != nil {

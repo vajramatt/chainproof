@@ -100,6 +100,12 @@ external copy of chain head or bundle, local verification cannot establish
 which history came first. ChainProof currently provides no timestamp authority,
 external anchoring, transparency log, or signed release of individual records.
 
+Proof bundles, continuity bundles, and workspace `continuity.json` are parsed
+strictly: duplicate keys, unknown or case-variant schema fields, non-canonical
+number text, and trailing data are rejected, and integers are preserved
+exactly instead of rounding through float64. A bundle therefore cannot verify
+while carrying a second value that another JSON reader would trust.
+
 Provenance modes describe collection path:
 
 - `observed` means ChainProof directly witnessed recorded event.
