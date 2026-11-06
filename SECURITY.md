@@ -114,7 +114,12 @@ Provenance modes describe collection path:
 - `derived` means ChainProof computed record from other evidence.
 
 Valid chain does not prove reported or imported claim was true, complete, or
-produced by named model. Key-derived `agent_id` is stable local attribution.
+produced by named model. Run declaration fields `agent`, `harness`, `model`,
+`status`, `started_at`, `completed_at`, and `metadata` (other than the bound
+`chainproof.agent.v1` extension) are not covered by any hash in version 1 and
+can be edited in a bundle without failing verification. Verification output
+lists them in `unauthenticated_run_fields`; rely on hashed event content or
+continuity checkpoint anchors instead. Key-derived `agent_id` is stable local attribution.
 Current records are not signed and do not prove private-key possession. Mission
 leases coordinate cooperative workers; they are not identity or authorization
 proof.

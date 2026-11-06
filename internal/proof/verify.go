@@ -51,5 +51,5 @@ func VerifyBundle(bundle Bundle) Verification {
 	if previous != bundle.Run.ChainHead {
 		return Verification{Valid: false, Reason: "chain_head_mismatch", EntryCount: len(bundle.Events), ChainHead: previous}
 	}
-	return Verification{Valid: true, EntryCount: len(bundle.Events), ChainHead: previous}
+	return Verification{Valid: true, EntryCount: len(bundle.Events), ChainHead: previous, UnauthenticatedRunFields: UnauthenticatedRunFields()}
 }

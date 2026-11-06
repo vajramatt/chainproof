@@ -62,6 +62,19 @@ previous-hash links, every event hash, declared entry count, and declared chain
 head. Verifying only the hashes present in a supplied suffix or prefix is not
 sufficient.
 
+### Run declaration boundary
+
+The bundle `run` object is a declaration, not hashed evidence. Version 1 binds
+only `run_id` (every event repeats it), `entry_count`, `chain_head`, and the
+`chainproof.agent.v1` metadata extension (it must match event extensions). The
+fields `agent`, `harness`, `model`, `status`, `started_at`, `completed_at`, and
+every other `metadata` key, including `mission_id`, are covered by no hash and
+can be edited without breaking verification. A verifier MUST NOT present them
+as verified; ChainProof reports them as `unauthenticated_run_fields` on every
+valid result. Use event content (actor, timestamps, payloads), which is hashed,
+when those facts matter. Mission membership is authenticated only through
+continuity checkpoints, whose run anchors are hashed.
+
 ## Agent attribution extension
 
 Run metadata and event extensions MAY contain `chainproof.agent.v1`. The value

@@ -729,7 +729,9 @@ chainproof verify-file proof.json
 ```
 
 The verifier works on a clean machine because the proof bundle contains the
-run declaration and canonical events. The format is documented in
+run declaration and canonical events. Run declaration fields such as `agent`,
+`model`, `status`, timestamps, and `metadata.mission_id` are not hashed;
+verification lists them in `unauthenticated_run_fields`. The format is documented in
 [`spec/provenance-v1.md`](spec/provenance-v1.md).
 
 > ChainProof records what an agent, harness, adapter, or observer reports. A

@@ -57,6 +57,17 @@ type Verification struct {
 	Sequence   *int   `json:"sequence,omitempty"`
 	EntryCount int    `json:"entry_count"`
 	ChainHead  string `json:"chain_head"`
+	// UnauthenticatedRunFields lists run declaration fields that no event hash
+	// covers. A valid chain says nothing about their values.
+	UnauthenticatedRunFields []string `json:"unauthenticated_run_fields,omitempty"`
+}
+
+// UnauthenticatedRunFields returns run declaration fields that version 1 does
+// not bind to any hash. run_id, entry_count, and chain_head are checked against
+// events, and metadata["chainproof.agent.v1"] must match event extensions; all
+// other metadata keys, including mission_id, are unauthenticated.
+func UnauthenticatedRunFields() []string {
+	return []string{"agent", "harness", "model", "status", "started_at", "completed_at", "metadata"}
 }
 
 type Bundle struct {
